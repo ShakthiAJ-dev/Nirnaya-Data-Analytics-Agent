@@ -274,7 +274,7 @@ async def get_available_models(
                 "name": "Claude 4.5 Haiku",
                 "provider": "anthropic",
                 "description": "Ultra-fast and lightweight model for high-throughput tasks.",
-            }
+            },
         ])
 
     # 2. Check OpenAI availability
@@ -291,7 +291,7 @@ async def get_available_models(
                 "name": "GPT-5.4 Mini",
                 "provider": "openai",
                 "description": "Fast and cost-efficient OpenAI model for structured agent execution.",
-            }
+            },
         ])
 
     return JSONResponse(
