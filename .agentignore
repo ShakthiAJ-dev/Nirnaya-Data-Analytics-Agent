@@ -1,0 +1,54 @@
+# .agentignore
+# ─────────────────────────────────────────────────────────────────────────────
+# Files and directories that NO AI agent / LLM coding assistant should read,
+# index, suggest changes to, or include in any context window.
+#
+# Respected by: Antigravity (AGY), GitHub Copilot, Cursor, Continue, Codeium,
+#               and any tool that honours .agentignore conventions.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Secret / credential files ─────────────────────────────────────────────────
+.env
+.env.*
+*.env
+.env.local
+.env.production
+.env.staging
+.env.development
+.env.test
+secrets.json
+secrets.yaml
+secrets.yml
+credentials.json
+service_account.json
+
+# ── Key / certificate files ───────────────────────────────────────────────────
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+id_rsa
+id_ecdsa
+id_ed25519
+
+# ── Cloud / infra credentials ─────────────────────────────────────────────────
+.aws/credentials
+.aws/config
+.gcloud/
+gcloud-service-key.json
+
+# ── Virtual environments (large + irrelevant) ─────────────────────────────────
+.venv/
+venv/
+env/
+node_modules/
+
+# ── Build artefacts ───────────────────────────────────────────────────────────
+dist/
+build/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
