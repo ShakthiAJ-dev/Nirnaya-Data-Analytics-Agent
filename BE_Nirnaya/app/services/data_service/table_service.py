@@ -426,12 +426,19 @@ class TableService:
         self,
         role: str,
         content: str,
+        *,
+        project_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Shortcut to insert a chat history row for this session."""
         return await self.insert(
             "chat_history",
-            {"role": role, "content": content, "metadata": metadata},
+            {
+                "role": role,
+                "content": content,
+                "project_id": project_id,
+                "metadata": metadata,
+            },
         )
 
     async def get_chat_history(

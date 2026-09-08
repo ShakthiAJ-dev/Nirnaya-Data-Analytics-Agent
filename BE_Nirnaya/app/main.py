@@ -32,7 +32,10 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from app.api.routes.health import router as health_router
 from app.api.routes.session import router as session_router
+from app.api.routes.projects import router as projects_router
+from app.api.routes.databases import router as databases_router
 from app.websocket.ws_agent import router as ws_agent_router
+from app.services.database_service import DatabaseService
 from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
@@ -65,6 +68,9 @@ async def lifespan(app: FastAPI):
 
     # WebSocket task manager (in-process, no I/O needed)
     app.state.ws_manager = WSManager()
+
+    # Create app tables (projects, databases, file_uploads) if absent
+    await DatabaseService.initialize_app_tables(supabase_service)
 
     logger.info("nirnaya_services_ready", services=["supabase", "redis", "ws_manager"])
 
@@ -136,6 +142,8 @@ async def request_id_middleware(
 
 app.include_router(health_router, prefix=settings.api_v1_prefix)
 app.include_router(session_router, prefix=settings.api_v1_prefix)
+app.include_router(projects_router, prefix=settings.api_v1_prefix)
+app.include_router(databases_router, prefix=settings.api_v1_prefix)
 app.include_router(ws_agent_router)  # /ws/agent — no api/v1 prefix
 
 

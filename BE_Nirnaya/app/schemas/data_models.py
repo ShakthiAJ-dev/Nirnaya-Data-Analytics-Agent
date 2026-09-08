@@ -94,6 +94,10 @@ class ChatHistoryRecord(TableModel):
     )
 
     # ── Optional fields ────────────────────────────────────────────────
+    project_id: Optional[str] = Field(
+        default=None,
+        description="Project this message belongs to.",
+    )
     metadata: Optional[dict[str, Any]] = Field(
         default=None,
         description="Arbitrary metadata (model used, token count, etc.).",
@@ -111,15 +115,104 @@ class ChatHistoryRecord(TableModel):
 
 
 # ---------------------------------------------------------------------------
+# ProjectRecord — public.projects
+# ---------------------------------------------------------------------------
+
+class ProjectRecord(TableModel):
+    """
+    Schema for the ``projects`` table.
+    Each project is a chat/analysis session scoped to a session_id.
+    Title starts as 'Untitled'; updated when the user asks their first question.
+
+    Note: uses UUID PK (created_at startup via initialize_app_tables).
+    TableService is not used for this model; ProjectService queries directly.
+    """
+
+    table_name: ClassVar[str] = "projects"
+
+    title: str = Field(default="Untitled", description="Project title.")
+    database_id: Optional[str] = Field(
+        default=None, description="Linked database UUID, if any."
+    )
+    updated_at: Optional[str] = Field(
+        default=None, description="ISO timestamp of last update."
+    )
+    id: Optional[str] = Field(default=None, description="UUID PK (set by Postgres).")
+    created_at: Optional[str] = Field(default=None, description="ISO timestamp.")
+
+
+# ---------------------------------------------------------------------------
+# DatabaseRecord — public.databases
+# ---------------------------------------------------------------------------
+
+class DatabaseRecord(TableModel):
+    """
+    Schema for the ``databases`` table.
+    Each record represents a Postgres schema created for a session.
+    The demo database is seeded at boot with is_demo=True.
+
+    Note: uses UUID PK; managed by DatabaseService directly.
+    """
+
+    table_name: ClassVar[str] = "databases"
+
+    name: str = Field(description="Human-readable database name.")
+    schema_name: str = Field(description="Actual Postgres schema name.")
+    is_demo: bool = Field(default=False, description="True for the read-only demo database.")
+    metadata_path: Optional[str] = Field(
+        default=None,
+        description="Storage path: {session_id}/metadata/{database_id}.json",
+    )
+    id: Optional[str] = Field(default=None, description="UUID PK (set by Postgres).")
+    created_at: Optional[str] = Field(default=None, description="ISO timestamp.")
+
+
+# ---------------------------------------------------------------------------
+# FileUploadRecord — public.file_uploads
+# ---------------------------------------------------------------------------
+
+class FileUploadRecord(TableModel):
+    """
+    Schema for the ``file_uploads`` table.
+    Tracks each file/sheet ingested into a database schema.
+    """
+
+    table_name: ClassVar[str] = "file_uploads"
+
+    database_id: str = Field(description="Parent database UUID.")
+    filename: str = Field(description="Sanitized table-safe filename.")
+    original_filename: str = Field(description="Original uploaded filename.")
+    table_name_col: str = Field(
+        alias="table_name",
+        description="Table name within the database schema.",
+        default="",
+    )
+    row_count: int = Field(default=0, description="Number of rows ingested.")
+    status: str = Field(default="pending", description="pending | ready | error")
+    id: Optional[str] = Field(default=None, description="UUID PK (set by Postgres).")
+    created_at: Optional[str] = Field(default=None, description="ISO timestamp.")
+
+    class Config:
+        extra = "allow"
+        populate_by_name = True
+
+
+# ---------------------------------------------------------------------------
 # Registry — maps table_name → model class (used by TableService)
 # ---------------------------------------------------------------------------
 
 TABLE_REGISTRY: dict[str, type[TableModel]] = {
     ChatHistoryRecord.table_name: ChatHistoryRecord,
+    ProjectRecord.table_name: ProjectRecord,
+    DatabaseRecord.table_name: DatabaseRecord,
+    FileUploadRecord.table_name: FileUploadRecord,
 }
 
 __all__ = [
     "TableModel",
     "ChatHistoryRecord",
+    "ProjectRecord",
+    "DatabaseRecord",
+    "FileUploadRecord",
     "TABLE_REGISTRY",
 ]
