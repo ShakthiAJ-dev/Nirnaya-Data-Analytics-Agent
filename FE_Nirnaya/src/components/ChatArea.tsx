@@ -10,10 +10,12 @@ import {
   Clock,
   ArrowRight,
   Database,
+  KeyRound,
 } from 'lucide-react';
 import { LogoEmblem } from './Logo';
 import type { Message, Project } from '../types';
 import { AVAILABLE_MODELS } from '../constants/models';
+import type { BackendModel } from '../services/sessionService';
 
 interface ChatAreaProps {
   currentProject: Project;
@@ -21,6 +23,8 @@ interface ChatAreaProps {
   selectedModelId: string;
   isLoading: boolean;
   onSendSuggestedPrompt: (prompt: string) => void;
+  availableModels?: BackendModel[];
+  onOpenCredentials?: () => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -29,12 +33,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   selectedModelId,
   isLoading,
   onSendSuggestedPrompt,
+  availableModels = [],
+  onOpenCredentials,
 }) => {
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
 
   const selectedModel =
-    AVAILABLE_MODELS.find((m) => m.id === selectedModelId) || AVAILABLE_MODELS[0];
+    availableModels.find((m) => m.id === selectedModelId) ||
+    AVAILABLE_MODELS.find((m) => m.id === selectedModelId) ||
+    (availableModels.length > 0 ? availableModels[0] : null);
 
   // Auto scroll to bottom
   useEffect(() => {
@@ -84,10 +92,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
 
         <div className="chat-header-actions">
-          <div className="model-pill-badge" title={`Active model: ${selectedModel.name}`}>
-            <span className="model-pill-dot"></span>
-            <span>{selectedModel.name}</span>
-          </div>
+          {selectedModel ? (
+            <div className="model-pill-badge" title={`Active model: ${selectedModel.name}`}>
+              <span className="model-pill-dot"></span>
+              <span>{selectedModel.name}</span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="model-pill-badge"
+              style={{
+                background: 'rgba(245, 158, 11, 0.08)',
+                borderColor: 'rgba(245, 158, 11, 0.3)',
+                color: '#fbbf24',
+                cursor: onOpenCredentials ? 'pointer' : 'default',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+              }}
+              onClick={onOpenCredentials}
+              title="Click to add API key"
+            >
+              <KeyRound size={11} />
+              <span>API Key Required</span>
+            </button>
+          )}
         </div>
       </header>
 
@@ -106,6 +135,49 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               business questions, inspect uploaded data files, or simulate strategic decisions
               across <strong style={{ color: '#ffffff' }}>{currentProject.name}</strong>.
             </p>
+
+            {/* Prompt to add API keys if none configured */}
+            {availableModels.length === 0 && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  background: 'rgba(245, 158, 11, 0.08)',
+                  border: '1px solid rgba(245, 158, 11, 0.25)',
+                  borderRadius: '10px',
+                  padding: '10px 16px',
+                  margin: '0 auto 20px',
+                  maxWidth: '560px',
+                  fontSize: '12.5px',
+                  color: '#fbbf24',
+                }}
+              >
+                <KeyRound size={18} style={{ flexShrink: 0, color: '#f59e0b' }} />
+                <span style={{ flex: 1, textAlign: 'left', lineHeight: 1.4, color: '#e2e8f0' }}>
+                  No AI models configured yet. Add your Anthropic or OpenAI API key to start querying your data.
+                </span>
+                {onOpenCredentials && (
+                  <button
+                    type="button"
+                    onClick={onOpenCredentials}
+                    style={{
+                      padding: '6px 12px',
+                      background: '#4f46e5',
+                      color: '#ffffff',
+                      borderRadius: '6px',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                      border: 'none',
+                    }}
+                  >
+                    Add API Key
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Quick Starter Prompts */}
             <div className="starter-prompts-grid">

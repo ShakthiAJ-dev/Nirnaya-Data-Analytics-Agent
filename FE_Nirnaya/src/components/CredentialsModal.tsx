@@ -6,7 +6,7 @@ interface CredentialsModalProps {
   isOpen: boolean;
   onClose: () => void;
   credentials: LLMCredentials;
-  onSave: (creds: LLMCredentials) => void;
+  onSave: (creds: LLMCredentials) => Promise<void> | void;
 }
 
 export const CredentialsModal: React.FC<CredentialsModalProps> = ({
@@ -19,17 +19,27 @@ export const CredentialsModal: React.FC<CredentialsModalProps> = ({
   const [showAnthropic, setShowAnthropic] = useState(false);
   const [showOpenAI, setShowOpenAI] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSave(formData);
-    setSavedSuccess(true);
-    setTimeout(() => {
-      setSavedSuccess(false);
-      onClose();
-    }, 600);
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      await onSave(formData);
+      setSavedSuccess(true);
+      setTimeout(() => {
+        setSavedSuccess(false);
+        onClose();
+      }, 800);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save. Check your API key.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleClear = () => {
@@ -82,9 +92,28 @@ export const CredentialsModal: React.FC<CredentialsModalProps> = ({
             >
               <ShieldCheck size={18} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
               <span>
-                Your credentials are encrypted in local browser storage. They are never sent to third-party tracking servers.
+                Keys are encrypted with AES-256-GCM on the server and stored only for your session. They are never logged or returned.
               </span>
             </div>
+
+            {/* Error banner */}
+            {saveError && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 14px',
+                  background: 'rgba(239, 68, 68, 0.10)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  color: '#fca5a5',
+                }}
+              >
+                <span style={{ fontWeight: 600 }}>Error:</span> {saveError}
+              </div>
+            )}
 
             {/* Anthropic Claude Key (Primary for Haiku) */}
             <div className="form-group">
@@ -148,16 +177,25 @@ export const CredentialsModal: React.FC<CredentialsModalProps> = ({
             <button type="button" className="btn-secondary" onClick={handleClear}>
               Clear Keys
             </button>
-            <button type="button" className="btn-secondary" onClick={onClose}>
+            <button type="button" className="btn-secondary" onClick={onClose} disabled={isSaving}>
               Cancel
             </button>
-            <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              {savedSuccess ? (
+            <button
+              type="submit"
+              className="btn-primary"
+              disabled={isSaving}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 120 }}
+            >
+              {isSaving ? (
+                <>
+                  <span style={{ opacity: 0.7 }}>Saving...</span>
+                </>
+              ) : savedSuccess ? (
                 <>
                   <Sparkles size={15} /> Saved!
                 </>
               ) : (
-                'Save Credentials'
+                'Save & Validate'
               )}
             </button>
           </div>

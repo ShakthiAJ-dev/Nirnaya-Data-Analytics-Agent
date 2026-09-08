@@ -944,7 +944,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   display: flex;
   flex-direction: column;
   transition: border-color var(--transition-fast);
-  overflow: hidden;
+  /* overflow:hidden was clipping the upward model dropdown — removed */
+  overflow: visible;
 }
 
 .chat-input-container:focus-within {
@@ -1161,6 +1162,44 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .model-option-desc {
   font-size: 10.5px;
   color: var(--text-muted);
+}
+
+.model-picker-btn.model-picker-no-key {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.08);
+  color: #fbbf24;
+}
+
+.model-picker-btn.model-picker-no-key:hover {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.6);
+}
+
+.model-dropdown-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 14px 12px 10px;
+}
+
+.btn-add-keys-prompt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: #4f46e5;
+  color: #ffffff;
+  border-radius: var(--radius-md);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: background var(--transition-fast);
+}
+
+.btn-add-keys-prompt:hover {
+  background: #4338ca;
 }
 
 /* Send Button (Matte, non-shiny) */

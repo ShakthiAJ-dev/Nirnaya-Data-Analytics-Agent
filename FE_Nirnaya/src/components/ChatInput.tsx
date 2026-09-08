@@ -9,15 +9,31 @@ import {
   ChevronDown,
   Sparkles,
   Zap,
+  KeyRound,
 } from 'lucide-react';
 import type { FileAttachment } from '../types';
-import { AVAILABLE_MODELS } from '../constants/models';
+import type { BackendModel } from '../hooks/useModels';
+
+// Preferred defaults when BE models first load
+const PREFERRED_DEFAULTS = ['claude-4.5-haiku', 'gpt-5.4-mini'];
+
+function pickDefaultModel(models: BackendModel[]): string {
+  for (const preferred of PREFERRED_DEFAULTS) {
+    const found = models.find((m) => m.id === preferred);
+    if (found) return found.id;
+  }
+  return models[0]?.id ?? '';
+}
 
 interface ChatInputProps {
   onSendMessage: (content: string, files: FileAttachment[], selectedModel: string) => void;
   selectedModelId: string;
   onSelectModel: (modelId: string) => void;
   isLoading?: boolean;
+  /** Live models from BE — only populated when provider keys are stored. */
+  availableModels?: BackendModel[];
+  /** Callback to open the LLM Credentials modal when user needs to add keys. */
+  onOpenCredentials?: () => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -25,6 +41,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   selectedModelId,
   onSelectModel,
   isLoading = false,
+  availableModels = [],
+  onOpenCredentials,
 }) => {
   const [content, setContent] = useState('');
   const [stagedFiles, setStagedFiles] = useState<FileAttachment[]>([]);
@@ -33,8 +51,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modelPickerRef = useRef<HTMLDivElement>(null);
 
+  const hasModels = availableModels.length > 0;
+
+  // The currently selected model object (or null if no models loaded yet)
   const selectedModel =
-    AVAILABLE_MODELS.find((m) => m.id === selectedModelId) || AVAILABLE_MODELS[0];
+    availableModels.find((m) => m.id === selectedModelId) ||
+    (hasModels ? availableModels[0] : null);
 
   // Auto resize textarea
   useEffect(() => {
@@ -54,6 +76,20 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Auto-select smart default (claude-4.5-haiku for Anthropic, gpt-5.4-mini for OpenAI)
+  const modelsKey = availableModels.map((m) => m.id).join(',');
+  useEffect(() => {
+    if (availableModels.length > 0) {
+      const currentIsValid = availableModels.some((m) => m.id === selectedModelId);
+      if (!currentIsValid) {
+        onSelectModel(pickDefaultModel(availableModels));
+      }
+    } else if (selectedModelId) {
+      onSelectModel('');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelsKey]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -109,7 +145,22 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const handleSend = () => {
     if ((!content.trim() && stagedFiles.length === 0) || isLoading) return;
 
-    onSendMessage(content.trim(), stagedFiles, selectedModel.id);
+    if (!hasModels) {
+      if (onOpenCredentials) {
+        onOpenCredentials();
+      } else {
+        setShowModelPicker(true);
+      }
+      return;
+    }
+
+    const modelToUse = selectedModel?.id || selectedModelId;
+    if (!modelToUse) {
+      if (onOpenCredentials) onOpenCredentials();
+      return;
+    }
+
+    onSendMessage(content.trim(), stagedFiles, modelToUse);
     setContent('');
     setStagedFiles([]);
 
@@ -170,7 +221,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           <textarea
             ref={textareaRef}
             className="chat-textarea"
-            placeholder="Ask questions based on your data or project... (Shift+Enter for newline)"
+            placeholder={
+              hasModels
+                ? 'Ask questions based on your data or project... (Shift+Enter for newline)'
+                : 'Add an API key in settings to start asking analytics questions...'
+            }
             value={content}
             onChange={(e) => setContent(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -185,7 +240,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             className="btn-send-message"
             onClick={handleSend}
             disabled={(!content.trim() && stagedFiles.length === 0) || isLoading}
-            title="Send query (Enter)"
+            title={
+              !hasModels
+                ? 'Add an API key to send queries'
+                : 'Send query (Enter)'
+            }
             id="btn-send-chat"
           >
             <Send size={16} strokeWidth={2.2} />
@@ -194,57 +253,142 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
         {/* Bottom Bar: Model Selector Dropdown & Capabilities hint */}
         <div className="input-bottom-bar">
-          {/* Model Selector (Defaults to Claude 3.5 Haiku) */}
+          {/* Model Selector */}
           <div className="model-picker-wrapper" ref={modelPickerRef}>
-            <button
-              type="button"
-              className={`model-picker-btn ${selectedModel.id === 'claude-3-5-haiku' ? 'haiku-active' : ''}`}
-              onClick={() => setShowModelPicker(!showModelPicker)}
-              title="Select AI Model (Default: Claude 3.5 Haiku)"
-              id="btn-model-selector"
-            >
-              <Zap size={13} style={{ color: 'var(--accent-cyan)' }} />
-              <span>{selectedModel.name}</span>
-              {selectedModel.id === 'claude-3-5-haiku' && (
-                <span
-                  style={{
-                    fontSize: '9.5px',
-                    background: 'rgba(6, 182, 212, 0.15)',
-                    color: 'var(--accent-cyan)',
-                    padding: '1px 5px',
-                    borderRadius: '4px',
-                    fontWeight: 600,
-                  }}
-                >
-                  Default
+            {hasModels && selectedModel ? (
+              <button
+                type="button"
+                className={`model-picker-btn ${
+                  selectedModel.id === 'claude-4.5-haiku' || selectedModel.id === 'gpt-5.4-mini'
+                    ? 'haiku-active'
+                    : ''
+                }`}
+                onClick={() => setShowModelPicker(!showModelPicker)}
+                title="Select AI Model"
+                id="btn-model-selector"
+              >
+                <Zap size={13} style={{ color: 'var(--accent-cyan)' }} />
+                <span>{selectedModel.name}</span>
+                {(selectedModel.id === 'claude-4.5-haiku' ||
+                  selectedModel.id === 'gpt-5.4-mini') && (
+                  <span
+                    style={{
+                      fontSize: '9.5px',
+                      background: 'rgba(6, 182, 212, 0.15)',
+                      color: 'var(--accent-cyan)',
+                      padding: '1px 5px',
+                      borderRadius: '4px',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Default
+                  </span>
+                )}
+                <ChevronDown size={12} style={{ color: 'var(--text-muted)' }} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="model-picker-btn model-picker-no-key"
+                onClick={() => {
+                  if (onOpenCredentials) {
+                    onOpenCredentials();
+                  } else {
+                    setShowModelPicker(!showModelPicker);
+                  }
+                }}
+                title="No AI models active — click to add your API key"
+                id="btn-model-selector"
+              >
+                <KeyRound size={13} style={{ color: 'var(--accent-amber, #f59e0b)' }} />
+                <span style={{ color: 'var(--accent-amber, #f59e0b)', fontWeight: 500 }}>
+                  Add API Key to unlock models
                 </span>
-              )}
-              <ChevronDown size={12} style={{ color: 'var(--text-muted)' }} />
-            </button>
+              </button>
+            )}
 
             {/* Model Dropdown Menu */}
             {showModelPicker && (
               <div className="model-dropdown-menu" id="model-dropdown-menu">
-                <div className="model-dropdown-header">Select Analytics Model</div>
-                {AVAILABLE_MODELS.map((model) => (
-                  <button
-                    key={model.id}
-                    type="button"
-                    className={`model-option-item ${model.id === selectedModel.id ? 'selected' : ''}`}
-                    onClick={() => {
-                      onSelectModel(model.id);
-                      setShowModelPicker(false);
-                    }}
-                  >
-                    <div className="model-option-top">
-                      <span className="model-option-name">{model.name}</span>
-                      {model.badge && (
-                        <span className="model-option-badge">{model.badge}</span>
-                      )}
+                {hasModels ? (
+                  <>
+                    <div className="model-dropdown-header">Available Models</div>
+                    {availableModels.map((model) => {
+                      const isSelected = model.id === selectedModel?.id;
+                      const isDefault =
+                        model.id === 'claude-4.5-haiku' || model.id === 'gpt-5.4-mini';
+                      return (
+                        <button
+                          key={model.id}
+                          type="button"
+                          className={`model-option-item ${isSelected ? 'selected' : ''}`}
+                          onClick={() => {
+                            onSelectModel(model.id);
+                            setShowModelPicker(false);
+                          }}
+                        >
+                          <div className="model-option-top">
+                            <span className="model-option-name">{model.name}</span>
+                            {isDefault ? (
+                              <span className="model-option-badge">Default</span>
+                            ) : model.provider ? (
+                              <span
+                                className="model-option-badge"
+                                style={{ textTransform: 'capitalize' }}
+                              >
+                                {model.provider}
+                              </span>
+                            ) : null}
+                          </div>
+                          {model.description && (
+                            <span className="model-option-desc">{model.description}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </>
+                ) : (
+                  <div className="model-dropdown-empty-state">
+                    <KeyRound
+                      size={20}
+                      style={{ color: 'var(--accent-amber, #f59e0b)', margin: '0 auto 8px' }}
+                    />
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        fontSize: '13px',
+                        color: 'var(--text-primary)',
+                        marginBottom: '4px',
+                      }}
+                    >
+                      No AI Models Configured
                     </div>
-                    <span className="model-option-desc">{model.description}</span>
-                  </button>
-                ))}
+                    <div
+                      style={{
+                        fontSize: '11.5px',
+                        color: 'var(--text-muted)',
+                        lineHeight: 1.4,
+                        marginBottom: '12px',
+                      }}
+                    >
+                      Add your Anthropic (Claude) or OpenAI (GPT) API key to unlock data analytics
+                      models for this session.
+                    </div>
+                    {onOpenCredentials && (
+                      <button
+                        type="button"
+                        className="btn-add-keys-prompt"
+                        onClick={() => {
+                          setShowModelPicker(false);
+                          onOpenCredentials();
+                        }}
+                      >
+                        <KeyRound size={12} />
+                        <span>Configure API Keys</span>
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>

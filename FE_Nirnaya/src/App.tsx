@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { ChatInput } from './components/ChatInput';
@@ -15,6 +15,8 @@ import {
   DEFAULT_PROJECTS,
 } from './constants/models';
 import { generateAnalyticsResponse } from './services/analyticsAgent';
+import { useSession } from './hooks/useSession';
+import { useModels } from './hooks/useModels';
 
 const STORAGE_KEYS = {
   SESSIONS: 'nirnaya_chat_sessions_v1',
@@ -24,6 +26,12 @@ const STORAGE_KEYS = {
 };
 
 function App() {
+  // ── Backend session + WebSocket (auto-init on mount) ────────────────────
+  const { sessionStatus, submitKey } = useSession();
+
+  // ── Live models from BE (populated once session is ready + keys stored) ─────
+  const { models: availableModels, refresh: refreshModels } = useModels(sessionStatus === 'ready');
+
   // 1. Projects State
   const [projects] = useState<Project[]>(DEFAULT_PROJECTS);
   const [currentProjectId, setCurrentProjectId] = useState<string>(() => {
@@ -190,9 +198,26 @@ ORDER BY total_revenue DESC;`,
     }
   };
 
-  const handleSaveCredentials = (newCreds: LLMCredentials) => {
+  const handleSaveCredentials = useCallback(async (newCreds: LLMCredentials) => {
     setCredentials(newCreds);
-  };
+
+    // ── Submit keys to the BE (encrypted + stored in Redis) ──────────────
+    const tasks: Promise<void>[] = [];
+
+    if (newCreds.anthropicApiKey.trim()) {
+      tasks.push(submitKey('anthropic', newCreds.anthropicApiKey));
+    }
+    if (newCreds.openaiApiKey.trim()) {
+      tasks.push(submitKey('openai', newCreds.openaiApiKey));
+    }
+
+    if (tasks.length > 0) {
+      await Promise.all(tasks);
+      console.debug('[App] All LLM keys stored on BE successfully');
+      // ── Re-fetch model list immediately ───────────────────────────
+      await refreshModels();
+    }
+  }, [submitKey, refreshModels]);
 
   const handleSendMessage = async (
     prompt: string,
@@ -312,6 +337,8 @@ ORDER BY total_revenue DESC;`,
           onSendSuggestedPrompt={(suggested) =>
             handleSendMessage(suggested, [], selectedModelId)
           }
+          availableModels={availableModels}
+          onOpenCredentials={() => setIsCredentialsModalOpen(true)}
         />
 
         {/* 3. Bottom Chat Bar (Plus icon for files, Default Haiku model selector, Send button) */}
@@ -320,6 +347,8 @@ ORDER BY total_revenue DESC;`,
           selectedModelId={selectedModelId}
           onSelectModel={(modelId) => setSelectedModelId(modelId)}
           isLoading={isLoading}
+          availableModels={availableModels}
+          onOpenCredentials={() => setIsCredentialsModalOpen(true)}
         />
       </div>
 
