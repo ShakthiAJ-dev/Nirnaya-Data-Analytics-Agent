@@ -12,7 +12,7 @@ DELETE /api/v1/session/cleanup                 — cleanup all session data
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Request, UploadFile, status
+from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 
 from app.core.dependencies import RedisDep, get_session_service
@@ -234,6 +234,27 @@ async def delete_table(
         status_code=status.HTTP_200_OK,
         content={"success": True, "data": None, "message": f"Table '{table_name}' deleted."},
     )
+
+
+@router.get(
+    "/databases/{database_id}/tables/{table_name}/preview",
+    status_code=status.HTTP_200_OK,
+    summary="Preview table rows with pagination",
+    description="Returns up to `limit` rows starting at `offset`. Max limit=100.",
+)
+async def preview_table(
+    database_id: str,
+    table_name: str,
+    request: Request,
+    redis: RedisDep,
+    limit: int = 20,
+    offset: int = 0,
+) -> JSONResponse:
+    session_id, _ = await _require_session(request, redis)
+    data = await DatabaseService(session_id, _supabase(request)).preview_table(
+        database_id.strip(), table_name.strip(), limit=min(max(limit, 1), 100), offset=max(offset, 0)
+    )
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True, "data": data})
 
 
 @router.delete(

@@ -46,6 +46,8 @@ function App() {
   const [databases, setDatabases] = useState<Database[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  // pendingDatabaseId: the database selected for next/current chat (before project exists)
+  const [pendingDatabaseId, setPendingDatabaseId] = useState<string>('demo-database');
 
   // ── Modal state ───────────────────────────────────────────────────────────
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
@@ -201,6 +203,11 @@ function App() {
     }
   }, []);
 
+  // Fetch projects + databases once session is ready
+  useEffect(() => {
+    if (sessionStatus === 'ready') fetchAllData();
+  }, [sessionStatus, fetchAllData]);
+
   // ---------------------------------------------------------------------------
   // Persist selected model
   // ---------------------------------------------------------------------------
@@ -245,12 +252,39 @@ function App() {
   // ---------------------------------------------------------------------------
   const handleSelectProject = (projectId: string) => {
     setCurrentProjectId(projectId);
+    const proj = projects.find((p) => p.id === projectId);
+    if (proj?.is_demo || proj?.isDemo || proj?.id === 'demo-project') {
+      setPendingDatabaseId('demo-database');
+    } else if (proj?.database_id) {
+      setPendingDatabaseId(proj.database_id);
+    }
+  };
+
+  // Select a database (pre-project): sets pending db; for demo also activates demo project
+  const handleSelectDatabase = (dbId: string) => {
+    setPendingDatabaseId(dbId);
+    if (dbId === 'demo-database') {
+      const demoProj = projects.find((p) => p.is_demo || p.isDemo || p.id === 'demo-project');
+      if (demoProj) setCurrentProjectId(demoProj.id);
+      else setCurrentProjectId(null);
+    }
+    // For user databases: don't change current project (user must create a new chat)
   };
 
   const handleCreateProject = async (databaseId?: string) => {
+    if (databaseId === 'demo-database') {
+      // Demo doesn't create a real project — just activate demo project
+      const demoProj = projects.find((p) => p.is_demo || p.isDemo || p.id === 'demo-project');
+      if (demoProj) {
+        setCurrentProjectId(demoProj.id);
+        setPendingDatabaseId('demo-database');
+      }
+      return;
+    }
     const newProject = await projectService.createProject({ database_id: databaseId });
     setProjects((prev) => [{ ...newProject, messages: [] }, ...prev]);
     setCurrentProjectId(newProject.id);
+    if (databaseId) setPendingDatabaseId(databaseId);
   };
 
   const handleDeleteProject = async (projectId: string, e: React.MouseEvent) => {
@@ -331,19 +365,36 @@ function App() {
       model: modelId,
     };
 
-    // Create a new project if there isn't a current one
+    // Create a new project if there isn't a current one (use pending database)
     let targetProjectId = currentProjectId;
-    if (!targetProjectId) {
+    const isDemoPending = pendingDatabaseId === 'demo-database';
+
+    if (!targetProjectId && !isDemoPending) {
       try {
         const newProject = await projectService.createProject({
-          database_id: activeDatabase?.id,
+          database_id: pendingDatabaseId || undefined,
         });
         setProjects((prev) => [{ ...newProject, messages: [userMessage] }, ...prev]);
         setCurrentProjectId(newProject.id);
+        setPendingDatabaseId(newProject.database_id || pendingDatabaseId);
         targetProjectId = newProject.id;
       } catch (err) {
         console.error('[App] Failed to create project on send:', err);
         return;
+      }
+    } else if (!targetProjectId && isDemoPending) {
+      // Route to demo project, append user message
+      const demoProj = projects.find((p) => p.is_demo || p.isDemo || p.id === 'demo-project');
+      if (demoProj) {
+        targetProjectId = demoProj.id;
+        setCurrentProjectId(demoProj.id);
+        setProjects((prev) =>
+          prev.map((p) =>
+            p.id === demoProj.id
+              ? { ...p, messages: [...(p.messages || []), userMessage] }
+              : p
+          )
+        );
       }
     } else {
       // Append user message to existing project
@@ -356,12 +407,14 @@ function App() {
       );
     }
 
-    // Auto-update title on first user message
+    // Auto-update title on first user message (skip for demo project)
     const targetProject = projects.find((p) => p.id === targetProjectId);
     const isFirstMessage = !targetProject || (targetProject.messages || []).length === 0;
-    if (isFirstMessage && targetProjectId) {
+    const isRealProject = targetProjectId && targetProjectId !== 'demo-project'
+      && !targetProject?.is_demo && !targetProject?.isDemo;
+    if (isFirstMessage && isRealProject) {
       const snippet = prompt.length > 60 ? `${prompt.substring(0, 60)}…` : prompt;
-      projectService.updateProjectTitle(targetProjectId, snippet).then((updated) => {
+      projectService.updateProjectTitle(targetProjectId!, snippet).then((updated) => {
         setProjects((prev) =>
           prev.map((p) => (p.id === targetProjectId ? { ...p, title: updated.title } : p))
         );
@@ -390,8 +443,9 @@ function App() {
     );
 
     // Send over WebSocket if client is ready, or use demo service if demo project
+    const resolvedProject = projects.find((p) => p.id === targetProjectId);
     try {
-      if (currentProject?.is_demo) {
+      if (resolvedProject?.is_demo || resolvedProject?.isDemo || isDemoPending) {
         const { demoService } = await import('./services/demoService');
         const resp = await demoService.sendDemoChat(prompt);
         setProjects((prev) =>
@@ -469,10 +523,29 @@ function App() {
   // ---------------------------------------------------------------------------
   const activeMessages = currentProject?.messages ?? [];
 
+  // Pending database name for header display
+  const demoProject = projects.find((p) => p.is_demo || p.isDemo || p.id === 'demo-project');
+  const pendingDatabaseName =
+    pendingDatabaseId === 'demo-database'
+      ? 'Music E-commerce (Demo)'
+      : databases.find((d) => d.id === pendingDatabaseId)?.name ?? 'Select a Database';
+
   // Build a minimal Project-like object for ChatArea (which still uses .name)
   const chatAreaProject = currentProject
     ? { id: currentProject.id, name: currentProject.title || 'Untitled', description: '', datasetsCount: 0, createdAt: currentProject.created_at }
     : null;
+
+  // All databases including demo (for NewProjectModal)
+  const allDatabasesForModal: Database[] = [
+    ...(demoProject ? [{
+      id: 'demo-database',
+      name: 'Music E-commerce (Demo)',
+      schema_name: demoProject.raw_metadata?.schema_name || demoProject.raw_metadata?.schema || 'demo',
+      is_demo: true as const,
+      created_at: '',
+    }] : []),
+    ...databases.filter((d) => !d.is_demo),
+  ];
 
   return (
     <div className="nirnaya-app">
@@ -491,7 +564,9 @@ function App() {
         projects={projects}
         databases={databases}
         credentials={credentials}
+        pendingDatabaseId={pendingDatabaseId}
         onSelectProject={handleSelectProject}
+        onSelectDatabase={handleSelectDatabase}
         onNewChat={() => setIsNewProjectModalOpen(true)}
         onDeleteProject={handleDeleteProject}
         onNewDatabase={() => setIsNewDatabaseModalOpen(true)}
@@ -507,6 +582,9 @@ function App() {
           messages={activeMessages}
           selectedModelId={selectedModelId}
           isLoading={isLoading || isLoadingData}
+          pendingDatabaseName={pendingDatabaseName}
+          availableDatabasesForPicker={allDatabasesForModal}
+          onSelectDatabase={handleSelectDatabase}
           onSendSuggestedPrompt={(suggested) => handleSendMessage(suggested, [], selectedModelId)}
           availableModels={availableModels}
           onOpenCredentials={() => setIsCredentialsModalOpen(true)}
@@ -535,7 +613,7 @@ function App() {
       <NewProjectModal
         isOpen={isNewProjectModalOpen}
         onClose={() => setIsNewProjectModalOpen(false)}
-        databases={databases}
+        databases={allDatabasesForModal}
         onCreateProject={handleCreateProject}
       />
 

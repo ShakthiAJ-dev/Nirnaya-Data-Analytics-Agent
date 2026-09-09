@@ -199,7 +199,7 @@ class DatabaseService:
                 data = json.loads(data)
             return data if isinstance(data, list) else []
         except Exception as exc:
-            logger.warning("exec_query_failed", sql=sql[:120], error=str(exc))
+            logger.warning("exec_query_failed", sql=sql, error=str(exc))
             return []
 
     async def _query_table_stats(
@@ -1014,6 +1014,68 @@ class DatabaseService:
             logger.warning("delete_table_file_upload_record_failed", error=str(exc))
 
         logger.info("table_deleted", database_id=database_id, table=table_name)
+
+    # ------------------------------------------------------------------
+    # Preview table rows
+    # ------------------------------------------------------------------
+
+    async def preview_table(
+        self, database_id: str, table_name: str, limit: int = 20, offset: int = 0
+    ) -> dict[str, Any]:
+        """Return paginated rows from a table. Excludes _row_id column."""
+        db = await self.get_database(database_id)
+        schema_name = db["schema_name"]
+        return await self._preview_by_schema(schema_name, table_name, limit, offset)
+
+    async def _preview_by_schema(
+        self, schema_name: str, table_name: str, limit: int = 20, offset: int = 0
+    ) -> dict[str, Any]:
+        """Core preview logic by schema_name (used by both user and demo preview)."""
+        col_info = await self._run_query(
+            f"SELECT column_name FROM information_schema.columns "
+            f"WHERE table_schema = '{schema_name}' AND table_name = '{table_name}' "
+            f"AND column_name != '_row_id' ORDER BY ordinal_position"
+        )
+        col_names = [c["column_name"] for c in col_info]
+        if not col_names:
+            return {
+                "rows": [], "columns": [], "total_count": 0,
+                "has_more": False, "offset": offset, "limit": limit,
+            }
+        cols_sql = ", ".join(f'"{c}"' for c in col_names)
+        # Use _row_id for stable ordering only if it exists on this table
+        has_row_id_result = await self._run_query(
+            f"SELECT 1 FROM information_schema.columns "
+            f"WHERE table_schema = '{schema_name}' AND table_name = '{table_name}' "
+            f"AND column_name = '_row_id' LIMIT 1"
+        )
+        order_clause = "ORDER BY _row_id" if has_row_id_result else ""
+        rows = await self._run_query(
+            f"SELECT {cols_sql} FROM {schema_name}.\"{table_name}\" "
+            f"{order_clause} LIMIT {limit} OFFSET {offset}"
+        )
+        rc = await self._run_query(
+            f"SELECT COUNT(*) AS cnt FROM {schema_name}.\"{table_name}\""
+        )
+        total = int(rc[0]["cnt"]) if rc else 0
+        # Serialize rows (convert non-JSON-safe types)
+        safe_rows = []
+        for row in rows:
+            safe_row = {}
+            for k, v in row.items():
+                if hasattr(v, "isoformat"):
+                    safe_row[k] = v.isoformat()
+                else:
+                    safe_row[k] = v
+            safe_rows.append(safe_row)
+        return {
+            "rows": safe_rows,
+            "columns": col_names,
+            "total_count": total,
+            "has_more": (offset + limit) < total,
+            "offset": offset,
+            "limit": limit,
+        }
 
     # ------------------------------------------------------------------
     # Session cleanup

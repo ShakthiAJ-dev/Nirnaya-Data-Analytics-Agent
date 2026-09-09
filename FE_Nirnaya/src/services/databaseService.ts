@@ -1,5 +1,6 @@
 import { api } from './apiClient';
 import type { Database } from '../types';
+import type { PreviewResponse } from './demoService';
 
 export interface CreateDatabasePayload {
   name: string;
@@ -50,6 +51,13 @@ export const databaseService = {
     const res = await api.post<{ success: boolean; data: UploadProcessResponse }>(
       `/databases/${databaseId}/upload/process`,
       { file_path: filePath, filename }
+    );
+    return res.data;
+  },
+
+  previewTable: async (databaseId: string, tableName: string, limit = 20, offset = 0): Promise<PreviewResponse> => {
+    const res = await api.get<{ success: boolean; data: PreviewResponse }>(
+      `/databases/${databaseId}/tables/${encodeURIComponent(tableName)}/preview?limit=${limit}&offset=${offset}`
     );
     return res.data;
   },

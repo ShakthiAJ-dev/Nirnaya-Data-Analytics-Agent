@@ -1,5 +1,15 @@
 import { api } from './apiClient';
 import type { Project } from '../types';
+import { DEFAULT_DEMO_DATASETS, INITIAL_DEMO_PROJECT } from '../constants/demoData';
+
+export interface PreviewResponse {
+  rows: Record<string, any>[];
+  columns: string[];
+  total_count: number;
+  has_more: boolean;
+  offset: number;
+  limit: number;
+}
 
 interface RawDemoProjectResponse {
   id: string;
@@ -9,8 +19,6 @@ interface RawDemoProjectResponse {
   datasets?: any[];
   raw_metadata?: any;
 }
-
-import { DEFAULT_DEMO_DATASETS, INITIAL_DEMO_PROJECT } from '../constants/demoData';
 
 export const demoService = {
   /**
@@ -42,6 +50,7 @@ export const demoService = {
         is_demo: true,
         isDemo: true,
         datasets,
+        raw_metadata: raw.raw_metadata ?? null,
         datasetsCount: datasets.length,
         session_id: 'demo-session',
         created_at: new Date().toISOString(),
@@ -59,5 +68,15 @@ export const demoService = {
    */
   async sendDemoChat(message: string): Promise<any> {
     return api.post<any>('/demo/chat', { message });
-  }
+  },
+
+  /**
+   * Preview rows from a demo table with pagination.
+   */
+  async previewDemoTable(tableName: string, limit = 20, offset = 0): Promise<PreviewResponse> {
+    const res = await api.get<{ success: boolean; data: PreviewResponse }>(
+      `/demo/tables/${encodeURIComponent(tableName)}/preview?limit=${limit}&offset=${offset}`
+    );
+    return res.data;
+  },
 };

@@ -70,7 +70,9 @@ export interface Project {
   messages: Message[];
   model?: string;
   is_demo?: boolean;
+  isDemo?: boolean;
   datasets?: DatasetMetadata[];
+  raw_metadata?: any;
   name?: string;
   description?: string;
   datasetsCount?: number;

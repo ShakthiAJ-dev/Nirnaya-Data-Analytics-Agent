@@ -38,13 +38,8 @@ logger = get_logger(__name__)
 
 # Model mapping dictionaries
 _BEDROCK_MODEL_MAP: dict[str, str] = {
-    "claude-3-5-sonnet": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-    "claude-3-5-sonnet-20241022": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-    "claude-3-5-haiku": "anthropic.claude-3-5-haiku-20241022-v1:0",
-    "claude-3-5-haiku-20241022": "anthropic.claude-3-5-haiku-20241022-v1:0",
-    "claude-3-7-sonnet": "anthropic.claude-3-7-sonnet-20250219-v1:0",
-    "claude-4.5-sonnet": "anthropic.claude-3-5-sonnet-20241022-v2:0",  # alias fallback
-    "claude-4.5-haiku": "anthropic.claude-3-5-haiku-20241022-v1:0",    # alias fallback
+    "claude-4.5-sonnet": "global.anthropic.claude-haiku-4-5-20251001-v1:0",  # alias fallback
+    "claude-4.5-haiku": "global.anthropic.claude-haiku-4-5-20251001-v1:0",    # alias fallback
 }
 
 _ANTHROPIC_DIRECT_MODEL_MAP: dict[str, str] = {
@@ -120,8 +115,6 @@ class LLMService:
             raise LLMException("BEDROCK_API_KEY is not configured on the server.")
 
         aws_kwargs: dict[str, Any] = {"region_name": settings.bedrock_region}
-        if settings.bedrock_endpoint:
-            aws_kwargs["endpoint_url"] = settings.bedrock_endpoint
 
         client = boto3.client(service_name="bedrock-runtime", **aws_kwargs)
 

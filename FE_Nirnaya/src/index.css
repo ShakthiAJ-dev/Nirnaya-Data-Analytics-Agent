@@ -1403,6 +1403,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   50% { transform: translateY(-3px); opacity: 1; }
 }
 
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* Mobile & Tablet Responsiveness */
 @media (max-width: 768px) {
   .nirnaya-sidebar {

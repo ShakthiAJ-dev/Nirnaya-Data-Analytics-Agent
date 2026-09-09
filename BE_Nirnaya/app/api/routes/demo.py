@@ -134,3 +134,36 @@ async def demo_chat(request: Request, body: DemoChatRequest) -> dict[str, Any]:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Demo chat failed: {exc}")
+
+
+@router.get("/tables/{table_name}/preview")
+async def demo_preview_table(
+    table_name: str,
+    request: Request,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Preview rows from a demo table. No auth required."""
+    try:
+        raw_metadata = await _fetch_demo_metadata(request)
+        schema_name = (
+            raw_metadata.get("schema_name")
+            or raw_metadata.get("schema")
+            or "demo"
+        )
+        table_meta = raw_metadata.get("tables", {}).get(table_name)
+        if table_meta is None:
+            raise HTTPException(status_code=404, detail=f"Table '{table_name}' not found in demo.")
+        supabase = request.app.state.supabase_service
+        from app.services.database_service import DatabaseService
+        ds = DatabaseService(session_id="demo", supabase=supabase)
+        data = await ds._preview_by_schema(
+            schema_name, table_name,
+            limit=min(max(limit, 1), 100),
+            offset=max(offset, 0),
+        )
+        return {"success": True, "data": data}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Demo preview failed: {exc}")

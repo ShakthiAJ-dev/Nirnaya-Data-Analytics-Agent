@@ -11,17 +11,22 @@ import {
   ArrowRight,
   Database,
   KeyRound,
+  ChevronDown,
+  Lock,
 } from 'lucide-react';
 import { LogoEmblem } from './Logo';
-import type { Message, Project } from '../types';
+import type { Message, Project, Database as DatabaseType } from '../types';
 import { AVAILABLE_MODELS } from '../constants/models';
 import type { BackendModel } from '../services/sessionService';
 
 interface ChatAreaProps {
-  currentProject: Project;
+  currentProject: Project | null;
   messages: Message[];
   selectedModelId: string;
   isLoading: boolean;
+  pendingDatabaseName?: string;
+  availableDatabasesForPicker?: Pick<DatabaseType, 'id' | 'name' | 'is_demo'>[];
+  onSelectDatabase?: (dbId: string) => void;
   onSendSuggestedPrompt: (prompt: string) => void;
   availableModels?: BackendModel[];
   onOpenCredentials?: () => void;
@@ -32,12 +37,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   messages,
   selectedModelId,
   isLoading,
+  pendingDatabaseName,
+  availableDatabasesForPicker = [],
+  onSelectDatabase,
   onSendSuggestedPrompt,
   availableModels = [],
   onOpenCredentials,
 }) => {
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
+  const [dbPickerOpen, setDbPickerOpen] = useState(false);
+
+  // No project: header shows pending DB name (selectable)
+  const hasProject = Boolean(currentProject?.id && currentProject.id !== 'demo-project' && !currentProject.is_demo && !currentProject.isDemo && (currentProject.messages?.length ?? 0) > 0);
+  const headerDbName = currentProject?.title && currentProject.title !== 'Untitled'
+    ? currentProject.title
+    : pendingDatabaseName ?? 'Select a Database';
 
   const selectedModel =
     availableModels.find((m) => m.id === selectedModelId) ||
@@ -82,13 +97,67 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     <div className="nirnaya-chat-main">
       {/* Chat Area Top Header */}
       <header className="chat-header">
-        <div className="chat-header-title-box">
-          <div className="chat-header-project">
-            <Database size={16} style={{ color: 'var(--accent-cyan)' }} />
-            <span>{currentProject?.title || currentProject?.name || 'Default Project'}</span>
-          </div>
+        <div className="chat-header-title-box" style={{ position: 'relative' }}>
+          {/* DB/Project name — selectable when no project yet */}
+          {!hasProject && onSelectDatabase ? (
+            <button
+              type="button"
+              className="chat-header-project"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              onClick={() => setDbPickerOpen((v) => !v)}
+              title="Change active database"
+            >
+              {availableDatabasesForPicker.find((d) => d.name === headerDbName)?.is_demo
+                ? <Lock size={14} style={{ color: '#818cf8' }} />
+                : <Database size={16} style={{ color: 'var(--accent-cyan)' }} />
+              }
+              <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{headerDbName}</span>
+              <ChevronDown size={13} style={{ color: 'var(--text-muted)', marginLeft: '2px' }} />
+            </button>
+          ) : (
+            <div className="chat-header-project">
+              <Database size={16} style={{ color: 'var(--accent-cyan)' }} />
+              <span>{currentProject?.title || currentProject?.name || headerDbName}</span>
+            </div>
+          )}
           <span className="header-slash">/</span>
           <span className="chat-header-session">Data Analytics Chat</span>
+
+          {/* Database picker dropdown */}
+          {dbPickerOpen && availableDatabasesForPicker.length > 0 && (
+            <div style={{
+              position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 200,
+              background: '#111827', border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: '8px', padding: '6px', minWidth: '220px',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+            }}>
+              {availableDatabasesForPicker.map((db) => (
+                <button
+                  key={db.id}
+                  type="button"
+                  onClick={() => { onSelectDatabase(db.id); setDbPickerOpen(false); }}
+                  style={{
+                    width: '100%', padding: '8px 10px', borderRadius: '6px', textAlign: 'left',
+                    background: db.name === headerDbName ? 'rgba(99,102,241,0.15)' : 'transparent',
+                    color: 'var(--text-secondary)', fontSize: '13px',
+                    display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
+                    border: 'none',
+                  }}
+                >
+                  {db.is_demo
+                    ? <Lock size={13} style={{ color: '#818cf8', flexShrink: 0 }} />
+                    : <Database size={13} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
+                  }
+                  <span>{db.name}</span>
+                  {db.is_demo && (
+                    <span style={{ marginLeft: 'auto', fontSize: '10px', padding: '1px 6px', background: 'rgba(99,102,241,0.2)', borderRadius: '4px', color: '#818cf8' }}>
+                      Demo
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="chat-header-actions">
