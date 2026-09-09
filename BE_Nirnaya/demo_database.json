@@ -1,0 +1,1639 @@
+{
+  "source": "PostgreSQL",
+  "db_name":"Music E-commerce",
+  "schema": "demo",
+  "tables": {
+    "invoice_line": {
+      "overview": "This table contains individual line items from invoices, representing the detailed breakdown of products (tracks) purchased on each invoice. Each row represents a single product sold as part of an invoice transaction.",
+      "use_case": "Analyze revenue by product, calculate line-item totals, identify popular tracks, determine average transaction sizes, and track pricing changes over time.",
+      "grain": "one line item on an invoice",
+      "domain_tags": [
+        "sales",
+        "finance",
+        "ecommerce"
+      ],
+      "key_columns": [
+        "invoice_line_id",
+        "invoice_id",
+        "track_id",
+        "unit_price",
+        "quantity"
+      ],
+      "currency": "USD",
+      "timezone": null,
+      "tenant_column": null,
+      "key_notes": "All quantities are 1, suggesting each invoice line contains exactly one unit of a track. Unit prices are limited to two distinct values (0.99 and 1.99), indicating a simplified or standardized pricing model. Foreign key relationships exist with invoice_id and track_id tables.",
+      "pii_columns": [],
+      "row_count": 2240,
+      "column_count": 5,
+      "columns": [
+        {
+          "name": "invoice_line_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 2240.0,
+          "avg": 1120.5,
+          "null_count": 0,
+          "unique_values_count": 2240
+        },
+        {
+          "name": "invoice_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 412.0,
+          "avg": 206.8688,
+          "null_count": 0,
+          "unique_values_count": 412
+        },
+        {
+          "name": "track_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 3500.0,
+          "avg": 1717.7344,
+          "null_count": 0,
+          "unique_values_count": 1984
+        },
+        {
+          "name": "unit_price",
+          "data_type": "double precision",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 0.99,
+          "max": 1.99,
+          "avg": 1.0396,
+          "null_count": 0,
+          "unique_values_count": 2
+        },
+        {
+          "name": "quantity",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 1.0,
+          "avg": 1.0,
+          "null_count": 0,
+          "unique_values_count": 1
+        }
+      ],
+      "sample_rows": [
+        {
+          "invoice_line_id": 1,
+          "invoice_id": 1,
+          "track_id": 2,
+          "unit_price": 0.99,
+          "quantity": 1
+        },
+        {
+          "invoice_line_id": 2,
+          "invoice_id": 1,
+          "track_id": 4,
+          "unit_price": 0.99,
+          "quantity": 1
+        },
+        {
+          "invoice_line_id": 3,
+          "invoice_id": 2,
+          "track_id": 6,
+          "unit_price": 0.99,
+          "quantity": 1
+        },
+        {
+          "invoice_line_id": 4,
+          "invoice_id": 2,
+          "track_id": 8,
+          "unit_price": 0.99,
+          "quantity": 1
+        },
+        {
+          "invoice_line_id": 5,
+          "invoice_id": 2,
+          "track_id": 10,
+          "unit_price": 0.99,
+          "quantity": 1
+        }
+      ]
+    },
+    "invoice": {
+      "overview": "This table contains invoice records with customer billing information and transaction totals. Each row represents a single invoice issued to a customer with associated billing address details and monetary amount.",
+      "use_case": "Analyze revenue trends, customer spending patterns, geographic distribution of sales, invoice volume over time, and billing address validation.",
+      "grain": "one invoice transaction",
+      "domain_tags": [
+        "sales",
+        "finance",
+        "billing"
+      ],
+      "key_columns": [
+        "invoice_id",
+        "customer_id",
+        "invoice_date",
+        "total",
+        "billing_country"
+      ],
+      "currency": "USD",
+      "timezone": null,
+      "tenant_column": "customer_id",
+      "key_notes": "billing_state has 202 null values (49% of rows) - common for international addresses outside US/Canada. billing_postal_code has 28 null values. State codes are inconsistent (mix of US state abbreviations, Canadian provinces, and full names like 'Dublin'). Invoice dates are stored as text in ISO 8601 format and should be converted to datetime for analysis.",
+      "pii_columns": [
+        "billing_address",
+        "billing_city",
+        "billing_postal_code"
+      ],
+      "row_count": 412,
+      "column_count": 9,
+      "columns": [
+        {
+          "name": "invoice_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 412.0,
+          "avg": 206.5,
+          "null_count": 0,
+          "unique_values_count": 412
+        },
+        {
+          "name": "customer_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 59.0,
+          "avg": 29.9296,
+          "null_count": 0,
+          "unique_values_count": 59
+        },
+        {
+          "name": "invoice_date",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 354
+        },
+        {
+          "name": "billing_address",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 59
+        },
+        {
+          "name": "billing_city",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 53
+        },
+        {
+          "name": "billing_state",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 202,
+          "unique_values_count": 25,
+          "unique_values": [
+            "AB",
+            "AZ",
+            "BC",
+            "CA",
+            "DF",
+            "Dublin",
+            "FL",
+            "IL",
+            "MA",
+            "MB",
+            "NS",
+            "NSW",
+            "NT",
+            "NV",
+            "NY",
+            "ON",
+            "QC",
+            "RJ",
+            "RM",
+            "SP",
+            "TX",
+            "UT",
+            "VV",
+            "WA",
+            "WI"
+          ]
+        },
+        {
+          "name": "billing_country",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 24,
+          "unique_values": [
+            "Argentina",
+            "Australia",
+            "Austria",
+            "Belgium",
+            "Brazil",
+            "Canada",
+            "Chile",
+            "Czech Republic",
+            "Denmark",
+            "Finland",
+            "France",
+            "Germany",
+            "Hungary",
+            "India",
+            "Ireland",
+            "Italy",
+            "Netherlands",
+            "Norway",
+            "Poland",
+            "Portugal",
+            "Spain",
+            "Sweden",
+            "United Kingdom",
+            "USA"
+          ]
+        },
+        {
+          "name": "billing_postal_code",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 28,
+          "unique_values_count": 55
+        },
+        {
+          "name": "total",
+          "data_type": "double precision",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 0.99,
+          "max": 25.86,
+          "avg": 5.6519,
+          "null_count": 0,
+          "unique_values_count": 23
+        }
+      ],
+      "sample_rows": [
+        {
+          "invoice_id": 1,
+          "customer_id": 2,
+          "invoice_date": "2021-01-01 00:00:00",
+          "billing_address": "Theodor-Heuss-Stra\u00dfe 34",
+          "billing_city": "Stuttgart",
+          "billing_state": null,
+          "billing_country": "Germany",
+          "billing_postal_code": "70174",
+          "total": 1.98
+        },
+        {
+          "invoice_id": 2,
+          "customer_id": 4,
+          "invoice_date": "2021-01-02 00:00:00",
+          "billing_address": "Ullev\u00e5lsveien 14",
+          "billing_city": "Oslo",
+          "billing_state": null,
+          "billing_country": "Norway",
+          "billing_postal_code": "0171",
+          "total": 3.96
+        },
+        {
+          "invoice_id": 3,
+          "customer_id": 8,
+          "invoice_date": "2021-01-03 00:00:00",
+          "billing_address": "Gr\u00e9trystraat 63",
+          "billing_city": "Brussels",
+          "billing_state": null,
+          "billing_country": "Belgium",
+          "billing_postal_code": "1000",
+          "total": 5.94
+        },
+        {
+          "invoice_id": 4,
+          "customer_id": 14,
+          "invoice_date": "2021-01-06 00:00:00",
+          "billing_address": "8210 111 ST NW",
+          "billing_city": "Edmonton",
+          "billing_state": "AB",
+          "billing_country": "Canada",
+          "billing_postal_code": "T6G 2C7",
+          "total": 8.91
+        },
+        {
+          "invoice_id": 5,
+          "customer_id": 23,
+          "invoice_date": "2021-01-11 00:00:00",
+          "billing_address": "69 Salem Street",
+          "billing_city": "Boston",
+          "billing_state": "MA",
+          "billing_country": "USA",
+          "billing_postal_code": "2113",
+          "total": 13.86
+        }
+      ]
+    },
+    "playlist": {
+      "overview": "Contains curated playlists available in the system. Each playlist has a unique identifier and descriptive name. This is a reference/dimension table for organizing media content into collections.",
+      "use_case": "Determine what playlists exist, analyze playlist popularity by counting associated tracks/content, segment users by playlist preferences, support playlist-based recommendations.",
+      "grain": "one playlist",
+      "domain_tags": [
+        "media",
+        "content",
+        "entertainment"
+      ],
+      "key_columns": [
+        "playlist_id",
+        "name"
+      ],
+      "currency": null,
+      "timezone": null,
+      "tenant_column": null,
+      "key_notes": "14 unique names for 18 playlists suggests some playlists may share the same name or duplicates exist. No timestamps present; cannot determine creation/modification dates.",
+      "pii_columns": [],
+      "row_count": 18,
+      "column_count": 2,
+      "columns": [
+        {
+          "name": "playlist_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 18.0,
+          "avg": 9.5,
+          "null_count": 0,
+          "unique_values_count": 18
+        },
+        {
+          "name": "name",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 14,
+          "unique_values": [
+            "90\u2019s Music",
+            "Audiobooks",
+            "Brazilian Music",
+            "Classical",
+            "Classical 101 - Deep Cuts",
+            "Classical 101 - Next Steps",
+            "Classical 101 - The Basics",
+            "Grunge",
+            "Heavy Metal Classic",
+            "Movies",
+            "Music",
+            "Music Videos",
+            "On-The-Go 1",
+            "TV Shows"
+          ]
+        }
+      ],
+      "sample_rows": [
+        {
+          "playlist_id": 1,
+          "name": "Music"
+        },
+        {
+          "playlist_id": 2,
+          "name": "Movies"
+        },
+        {
+          "playlist_id": 3,
+          "name": "TV Shows"
+        },
+        {
+          "playlist_id": 4,
+          "name": "Audiobooks"
+        },
+        {
+          "playlist_id": 5,
+          "name": "90\u2019s Music"
+        }
+      ]
+    },
+    "playlist_track": {
+      "overview": "This is a junction table that represents the many-to-many relationship between playlists and tracks. It maps which tracks belong to which playlists in a music database.",
+      "use_case": "Determine playlist composition, identify which tracks are in specific playlists, analyze track popularity across playlists, and manage playlist membership.",
+      "grain": "one mapping between a playlist and a track",
+      "domain_tags": [
+        "music",
+        "entertainment",
+        "content_management"
+      ],
+      "key_columns": [
+        "playlist_id",
+        "track_id"
+      ],
+      "currency": null,
+      "timezone": null,
+      "tenant_column": null,
+      "key_notes": "This is a junction/bridge table with no timestamps, so it does not track when tracks were added to playlists. The table contains 8715 rows mapping 14 playlists to 3503 unique tracks, indicating significant track reuse across playlists.",
+      "pii_columns": [],
+      "row_count": 8715,
+      "column_count": 2,
+      "columns": [
+        {
+          "name": "playlist_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 18.0,
+          "avg": 4.917,
+          "null_count": 0,
+          "unique_values_count": 14
+        },
+        {
+          "name": "track_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 3503.0,
+          "avg": 1767.0817,
+          "null_count": 0,
+          "unique_values_count": 3503
+        }
+      ],
+      "sample_rows": [
+        {
+          "playlist_id": 1,
+          "track_id": 3402
+        },
+        {
+          "playlist_id": 1,
+          "track_id": 3389
+        },
+        {
+          "playlist_id": 1,
+          "track_id": 3390
+        },
+        {
+          "playlist_id": 1,
+          "track_id": 3391
+        },
+        {
+          "playlist_id": 1,
+          "track_id": 3392
+        }
+      ]
+    },
+    "album": {
+      "overview": "This table contains a catalog of music albums with their titles and associated artists. It serves as a core reference table in a music database, linking albums to their creators through artist IDs.",
+      "use_case": "Identify album collections, analyze artist discographies, count albums per artist, and support music catalog searches and recommendations.",
+      "grain": "one album",
+      "domain_tags": [
+        "music",
+        "media",
+        "catalog"
+      ],
+      "key_columns": [
+        "album_id",
+        "title",
+        "artist_id"
+      ],
+      "currency": null,
+      "timezone": null,
+      "tenant_column": null,
+      "key_notes": "No null values present. 347 unique albums with 204 unique artists indicates some artists have multiple albums in the catalog. album_id appears to be a sequential primary key.",
+      "pii_columns": [],
+      "row_count": 347,
+      "column_count": 3,
+      "columns": [
+        {
+          "name": "album_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 347.0,
+          "avg": 174.0,
+          "null_count": 0,
+          "unique_values_count": 347
+        },
+        {
+          "name": "title",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 347
+        },
+        {
+          "name": "artist_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 275.0,
+          "avg": 121.9424,
+          "null_count": 0,
+          "unique_values_count": 204
+        }
+      ],
+      "sample_rows": [
+        {
+          "album_id": 1,
+          "title": "For Those About To Rock We Salute You",
+          "artist_id": 1
+        },
+        {
+          "album_id": 2,
+          "title": "Balls to the Wall",
+          "artist_id": 2
+        },
+        {
+          "album_id": 3,
+          "title": "Restless and Wild",
+          "artist_id": 2
+        },
+        {
+          "album_id": 4,
+          "title": "Let There Be Rock",
+          "artist_id": 1
+        },
+        {
+          "album_id": 5,
+          "title": "Big Ones",
+          "artist_id": 3
+        }
+      ]
+    },
+    "artist": {
+      "overview": "Contains a catalog of music artists with their unique identifiers and names. This is a master reference table for artist information used throughout the music database.",
+      "use_case": "Can answer questions about artist names, artist popularity, artist counts, and serves as a lookup table for joining with albums, tracks, and other artist-related data.",
+      "grain": "one unique music artist",
+      "domain_tags": [
+        "music",
+        "catalog",
+        "reference_data"
+      ],
+      "key_columns": [
+        "artist_id",
+        "name"
+      ],
+      "currency": null,
+      "timezone": null,
+      "tenant_column": null,
+      "key_notes": "",
+      "pii_columns": [],
+      "row_count": 275,
+      "column_count": 2,
+      "columns": [
+        {
+          "name": "artist_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 275.0,
+          "avg": 138.0,
+          "null_count": 0,
+          "unique_values_count": 275
+        },
+        {
+          "name": "name",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 275
+        }
+      ],
+      "sample_rows": [
+        {
+          "artist_id": 1,
+          "name": "AC/DC"
+        },
+        {
+          "artist_id": 2,
+          "name": "Accept"
+        },
+        {
+          "artist_id": 3,
+          "name": "Aerosmith"
+        },
+        {
+          "artist_id": 4,
+          "name": "Alanis Morissette"
+        },
+        {
+          "artist_id": 5,
+          "name": "Alice In Chains"
+        }
+      ]
+    },
+    "customer": {
+      "overview": "Contains master customer data including contact information, company affiliation, and geographic location. Each row represents a unique customer account with their assigned support representative.",
+      "use_case": "Identify customer demographics, geographic distribution, support rep workload, company affiliations, and contact information for customer relationship management and outreach campaigns.",
+      "grain": "one customer account",
+      "domain_tags": [
+        "sales",
+        "customer_management",
+        "crm"
+      ],
+      "key_columns": [
+        "customer_id",
+        "first_name",
+        "last_name",
+        "email",
+        "country",
+        "company",
+        "support_rep_id"
+      ],
+      "currency": null,
+      "timezone": null,
+      "tenant_column": null,
+      "key_notes": "company field is sparse (49 nulls out of 59 rows), indicating many individual customers. state field has 29 nulls and varies by country (state abbreviations for US/Canada, region names for others). postal_code has 4 nulls and phone has 1 null. fax is mostly null (47 nulls) and appears deprecated.",
+      "pii_columns": [
+        "first_name",
+        "last_name",
+        "address",
+        "postal_code",
+        "phone",
+        "fax",
+        "email"
+      ],
+      "row_count": 59,
+      "column_count": 13,
+      "columns": [
+        {
+          "name": "customer_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 59.0,
+          "avg": 30.0,
+          "null_count": 0,
+          "unique_values_count": 59
+        },
+        {
+          "name": "first_name",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 57
+        },
+        {
+          "name": "last_name",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 59
+        },
+        {
+          "name": "company",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 49,
+          "unique_values_count": 10,
+          "unique_values": [
+            "Apple Inc.",
+            "Banco do Brasil S.A.",
+            "Embraer - Empresa Brasileira de Aeron\u00e1utica S.A.",
+            "Google Inc.",
+            "JetBrains s.r.o.",
+            "Microsoft Corporation",
+            "Riotur",
+            "Rogers Canada",
+            "Telus",
+            "Woodstock Discos"
+          ]
+        },
+        {
+          "name": "address",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 59
+        },
+        {
+          "name": "city",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 53
+        },
+        {
+          "name": "state",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 29,
+          "unique_values_count": 25,
+          "unique_values": [
+            "AB",
+            "AZ",
+            "BC",
+            "CA",
+            "DF",
+            "Dublin",
+            "FL",
+            "IL",
+            "MA",
+            "MB",
+            "NS",
+            "NSW",
+            "NT",
+            "NV",
+            "NY",
+            "ON",
+            "QC",
+            "RJ",
+            "RM",
+            "SP",
+            "TX",
+            "UT",
+            "VV",
+            "WA",
+            "WI"
+          ]
+        },
+        {
+          "name": "country",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 24,
+          "unique_values": [
+            "Argentina",
+            "Australia",
+            "Austria",
+            "Belgium",
+            "Brazil",
+            "Canada",
+            "Chile",
+            "Czech Republic",
+            "Denmark",
+            "Finland",
+            "France",
+            "Germany",
+            "Hungary",
+            "India",
+            "Ireland",
+            "Italy",
+            "Netherlands",
+            "Norway",
+            "Poland",
+            "Portugal",
+            "Spain",
+            "Sweden",
+            "United Kingdom",
+            "USA"
+          ]
+        },
+        {
+          "name": "postal_code",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 4,
+          "unique_values_count": 55
+        },
+        {
+          "name": "phone",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 1,
+          "unique_values_count": 58
+        },
+        {
+          "name": "fax",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 47,
+          "unique_values_count": 12,
+          "unique_values": [
+            "+1 (212) 221-4679",
+            "+1 (408) 996-1011",
+            "+1 (425) 882-8081",
+            "+1 (604) 688-8756",
+            "+1 (650) 253-0000",
+            "+1 (780) 434-5565",
+            "+420 2 4172 5555",
+            "+55 (11) 3033-4564",
+            "+55 (11) 3055-8131",
+            "+55 (12) 3923-5566",
+            "+55 (21) 2271-7070",
+            "+55 (61) 3363-7855"
+          ]
+        },
+        {
+          "name": "email",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 59
+        },
+        {
+          "name": "support_rep_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 3.0,
+          "max": 5.0,
+          "avg": 3.9492,
+          "null_count": 0,
+          "unique_values_count": 3
+        }
+      ],
+      "sample_rows": [
+        {
+          "customer_id": 1,
+          "first_name": "Lu\u00eds",
+          "last_name": "Gon\u00e7alves",
+          "company": "Embraer - Empresa Brasileira de Aeron\u00e1utica S.A.",
+          "address": "Av. Brigadeiro Faria Lima, 2170",
+          "city": "S\u00e3o Jos\u00e9 dos Campos",
+          "state": "SP",
+          "country": "Brazil",
+          "postal_code": "12227-000",
+          "phone": "+55 (12) 3923-5555",
+          "fax": "+55 (12) 3923-5566",
+          "email": "luisg@embraer.com.br",
+          "support_rep_id": 3
+        },
+        {
+          "customer_id": 2,
+          "first_name": "Leonie",
+          "last_name": "K\u00f6hler",
+          "company": null,
+          "address": "Theodor-Heuss-Stra\u00dfe 34",
+          "city": "Stuttgart",
+          "state": null,
+          "country": "Germany",
+          "postal_code": "70174",
+          "phone": "+49 0711 2842222",
+          "fax": null,
+          "email": "leonekohler@surfeu.de",
+          "support_rep_id": 5
+        },
+        {
+          "customer_id": 3,
+          "first_name": "Fran\u00e7ois",
+          "last_name": "Tremblay",
+          "company": null,
+          "address": "1498 rue B\u00e9langer",
+          "city": "Montr\u00e9al",
+          "state": "QC",
+          "country": "Canada",
+          "postal_code": "H2G 1A7",
+          "phone": "+1 (514) 721-4711",
+          "fax": null,
+          "email": "ftremblay@gmail.com",
+          "support_rep_id": 3
+        },
+        {
+          "customer_id": 4,
+          "first_name": "Bj\u00f8rn",
+          "last_name": "Hansen",
+          "company": null,
+          "address": "Ullev\u00e5lsveien 14",
+          "city": "Oslo",
+          "state": null,
+          "country": "Norway",
+          "postal_code": "0171",
+          "phone": "+47 22 44 22 22",
+          "fax": null,
+          "email": "bjorn.hansen@yahoo.no",
+          "support_rep_id": 4
+        },
+        {
+          "customer_id": 5,
+          "first_name": "Franti\u0161ek",
+          "last_name": "Wichterlov\u00e1",
+          "company": "JetBrains s.r.o.",
+          "address": "Klanova 9/506",
+          "city": "Prague",
+          "state": null,
+          "country": "Czech Republic",
+          "postal_code": "14700",
+          "phone": "+420 2 4172 5555",
+          "fax": "+420 2 4172 5555",
+          "email": "frantisekw@jetbrains.com",
+          "support_rep_id": 4
+        }
+      ]
+    },
+    "employee": {
+      "overview": "This table contains core employee information including personal details, job titles, and organizational hierarchy. It maintains the employee roster with contact information and reporting relationships for a Canadian-based organization.",
+      "use_case": "Answer questions about workforce composition, organizational structure, employee tenure, manager-subordinate relationships, headcount by location/title, and employee contact details for HR and operational purposes.",
+      "grain": "one employee",
+      "domain_tags": [
+        "human_resources",
+        "organizational_structure",
+        "employee_management"
+      ],
+      "key_columns": [
+        "employee_id",
+        "first_name",
+        "last_name",
+        "title",
+        "reports_to",
+        "hire_date",
+        "city"
+      ],
+      "currency": null,
+      "timezone": null,
+      "tenant_column": null,
+      "key_notes": "reports_to column has 1 null value (likely the top-level manager with no supervisor). birth_date and hire_date are stored as text strings in datetime format rather than native datetime type. All employees are located in Alberta, Canada. Two hire_date duplicates exist among 8 employees (7 unique values).",
+      "pii_columns": [
+        "first_name",
+        "last_name",
+        "address",
+        "postal_code",
+        "phone",
+        "fax",
+        "email",
+        "birth_date"
+      ],
+      "row_count": 8,
+      "column_count": 15,
+      "columns": [
+        {
+          "name": "employee_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 8.0,
+          "avg": 4.5,
+          "null_count": 0,
+          "unique_values_count": 8
+        },
+        {
+          "name": "last_name",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 8,
+          "unique_values": [
+            "Adams",
+            "Callahan",
+            "Edwards",
+            "Johnson",
+            "King",
+            "Mitchell",
+            "Park",
+            "Peacock"
+          ]
+        },
+        {
+          "name": "first_name",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 8,
+          "unique_values": [
+            "Andrew",
+            "Jane",
+            "Laura",
+            "Margaret",
+            "Michael",
+            "Nancy",
+            "Robert",
+            "Steve"
+          ]
+        },
+        {
+          "name": "title",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 5,
+          "unique_values": [
+            "General Manager",
+            "IT Manager",
+            "IT Staff",
+            "Sales Manager",
+            "Sales Support Agent"
+          ]
+        },
+        {
+          "name": "reports_to",
+          "data_type": "double precision",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 6.0,
+          "avg": 2.8571,
+          "null_count": 1,
+          "unique_values_count": 3
+        },
+        {
+          "name": "birth_date",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 8,
+          "unique_values": [
+            "1947-09-19 00:00:00",
+            "1958-12-08 00:00:00",
+            "1962-02-18 00:00:00",
+            "1965-03-03 00:00:00",
+            "1968-01-09 00:00:00",
+            "1970-05-29 00:00:00",
+            "1973-07-01 00:00:00",
+            "1973-08-29 00:00:00"
+          ]
+        },
+        {
+          "name": "hire_date",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 7,
+          "unique_values": [
+            "2002-04-01 00:00:00",
+            "2002-05-01 00:00:00",
+            "2002-08-14 00:00:00",
+            "2003-05-03 00:00:00",
+            "2003-10-17 00:00:00",
+            "2004-01-02 00:00:00",
+            "2004-03-04 00:00:00"
+          ]
+        },
+        {
+          "name": "address",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 8,
+          "unique_values": [
+            "1111 6 Ave SW",
+            "11120 Jasper Ave NW",
+            "5827 Bowness Road NW",
+            "590 Columbia Boulevard West",
+            "683 10 Street SW",
+            "7727B 41 Ave",
+            "825 8 Ave SW",
+            "923 7 ST NW"
+          ]
+        },
+        {
+          "name": "city",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 3,
+          "unique_values": [
+            "Calgary",
+            "Edmonton",
+            "Lethbridge"
+          ]
+        },
+        {
+          "name": "state",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 1,
+          "unique_values": [
+            "AB"
+          ]
+        },
+        {
+          "name": "country",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 1,
+          "unique_values": [
+            "Canada"
+          ]
+        },
+        {
+          "name": "postal_code",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 8,
+          "unique_values": [
+            "T1H 1Y8",
+            "T1K 5N8",
+            "T2P 2T3",
+            "T2P 5G3",
+            "T2P 5M5",
+            "T3B 0C5",
+            "T3B 1Y7",
+            "T5K 2N1"
+          ]
+        },
+        {
+          "name": "phone",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 7,
+          "unique_values": [
+            "+1 (403) 246-9887",
+            "+1 (403) 262-3443",
+            "+1 (403) 263-4423",
+            "+1 (403) 456-9986",
+            "+1 (403) 467-3351",
+            "+1 (780) 428-9482",
+            "1 (780) 836-9987"
+          ]
+        },
+        {
+          "name": "fax",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 8,
+          "unique_values": [
+            "+1 (403) 246-9899",
+            "+1 (403) 262-3322",
+            "+1 (403) 262-6712",
+            "+1 (403) 263-4289",
+            "+1 (403) 456-8485",
+            "+1 (403) 467-8772",
+            "+1 (780) 428-3457",
+            "1 (780) 836-9543"
+          ]
+        },
+        {
+          "name": "email",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 8,
+          "unique_values": [
+            "andrew@chinookcorp.com",
+            "jane@chinookcorp.com",
+            "laura@chinookcorp.com",
+            "margaret@chinookcorp.com",
+            "michael@chinookcorp.com",
+            "nancy@chinookcorp.com",
+            "robert@chinookcorp.com",
+            "steve@chinookcorp.com"
+          ]
+        }
+      ],
+      "sample_rows": [
+        {
+          "employee_id": 1,
+          "last_name": "Adams",
+          "first_name": "Andrew",
+          "title": "General Manager",
+          "reports_to": null,
+          "birth_date": "1962-02-18 00:00:00",
+          "hire_date": "2002-08-14 00:00:00",
+          "address": "11120 Jasper Ave NW",
+          "city": "Edmonton",
+          "state": "AB",
+          "country": "Canada",
+          "postal_code": "T5K 2N1",
+          "phone": "+1 (780) 428-9482",
+          "fax": "+1 (780) 428-3457",
+          "email": "andrew@chinookcorp.com"
+        },
+        {
+          "employee_id": 2,
+          "last_name": "Edwards",
+          "first_name": "Nancy",
+          "title": "Sales Manager",
+          "reports_to": 1,
+          "birth_date": "1958-12-08 00:00:00",
+          "hire_date": "2002-05-01 00:00:00",
+          "address": "825 8 Ave SW",
+          "city": "Calgary",
+          "state": "AB",
+          "country": "Canada",
+          "postal_code": "T2P 2T3",
+          "phone": "+1 (403) 262-3443",
+          "fax": "+1 (403) 262-3322",
+          "email": "nancy@chinookcorp.com"
+        },
+        {
+          "employee_id": 3,
+          "last_name": "Peacock",
+          "first_name": "Jane",
+          "title": "Sales Support Agent",
+          "reports_to": 2,
+          "birth_date": "1973-08-29 00:00:00",
+          "hire_date": "2002-04-01 00:00:00",
+          "address": "1111 6 Ave SW",
+          "city": "Calgary",
+          "state": "AB",
+          "country": "Canada",
+          "postal_code": "T2P 5M5",
+          "phone": "+1 (403) 262-3443",
+          "fax": "+1 (403) 262-6712",
+          "email": "jane@chinookcorp.com"
+        },
+        {
+          "employee_id": 4,
+          "last_name": "Park",
+          "first_name": "Margaret",
+          "title": "Sales Support Agent",
+          "reports_to": 2,
+          "birth_date": "1947-09-19 00:00:00",
+          "hire_date": "2003-05-03 00:00:00",
+          "address": "683 10 Street SW",
+          "city": "Calgary",
+          "state": "AB",
+          "country": "Canada",
+          "postal_code": "T2P 5G3",
+          "phone": "+1 (403) 263-4423",
+          "fax": "+1 (403) 263-4289",
+          "email": "margaret@chinookcorp.com"
+        },
+        {
+          "employee_id": 5,
+          "last_name": "Johnson",
+          "first_name": "Steve",
+          "title": "Sales Support Agent",
+          "reports_to": 2,
+          "birth_date": "1965-03-03 00:00:00",
+          "hire_date": "2003-10-17 00:00:00",
+          "address": "7727B 41 Ave",
+          "city": "Calgary",
+          "state": "AB",
+          "country": "Canada",
+          "postal_code": "T3B 1Y7",
+          "phone": "1 (780) 836-9987",
+          "fax": "1 (780) 836-9543",
+          "email": "steve@chinookcorp.com"
+        }
+      ]
+    },
+    "genre": {
+      "overview": "A reference table containing music genres with unique identifiers. This table serves as a master data source for categorizing and classifying music content.",
+      "use_case": "Used to analyze music library composition by genre, generate genre-based reports, filter content by music type, and support genre-driven business analytics such as popularity trends and listener preferences.",
+      "grain": "one unique music genre",
+      "domain_tags": [
+        "music",
+        "content_management",
+        "catalog"
+      ],
+      "key_columns": [
+        "genre_id",
+        "name"
+      ],
+      "currency": null,
+      "timezone": null,
+      "tenant_column": null,
+      "key_notes": "",
+      "pii_columns": [],
+      "row_count": 25,
+      "column_count": 2,
+      "columns": [
+        {
+          "name": "genre_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 25.0,
+          "avg": 13.0,
+          "null_count": 0,
+          "unique_values_count": 25
+        },
+        {
+          "name": "name",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 25,
+          "unique_values": [
+            "Alternative",
+            "Alternative & Punk",
+            "Blues",
+            "Bossa Nova",
+            "Classical",
+            "Comedy",
+            "Drama",
+            "Easy Listening",
+            "Electronica/Dance",
+            "Heavy Metal",
+            "Hip Hop/Rap",
+            "Jazz",
+            "Latin",
+            "Metal",
+            "Opera",
+            "Pop",
+            "R&B/Soul",
+            "Reggae",
+            "Rock",
+            "Rock And Roll",
+            "Sci Fi & Fantasy",
+            "Science Fiction",
+            "Soundtrack",
+            "TV Shows",
+            "World"
+          ]
+        }
+      ],
+      "sample_rows": [
+        {
+          "genre_id": 1,
+          "name": "Rock"
+        },
+        {
+          "genre_id": 2,
+          "name": "Jazz"
+        },
+        {
+          "genre_id": 3,
+          "name": "Metal"
+        },
+        {
+          "genre_id": 4,
+          "name": "Alternative & Punk"
+        },
+        {
+          "genre_id": 5,
+          "name": "Rock And Roll"
+        }
+      ]
+    },
+    "media_type": {
+      "overview": "This table contains a catalog of media file types supported by the system. It maps media type IDs to their corresponding format names, including audio and video file formats with various protection levels.",
+      "use_case": "Identify what types of media content are available in the system, filter tracks or media by format type, and understand the distribution of audio versus video content.",
+      "grain": "one unique media file type",
+      "domain_tags": [
+        "content_management",
+        "media",
+        "catalog"
+      ],
+      "key_columns": [
+        "media_type_id",
+        "name"
+      ],
+      "currency": null,
+      "timezone": null,
+      "tenant_column": null,
+      "key_notes": "This is a small reference/dimension table with 5 rows. No null values present. Media types include both audio (AAC, MPEG) and video (MPEG-4) formats, with some entries marked as 'Protected' or 'Purchased' indicating licensing restrictions.",
+      "pii_columns": [],
+      "row_count": 5,
+      "column_count": 2,
+      "columns": [
+        {
+          "name": "media_type_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 5.0,
+          "avg": 3.0,
+          "null_count": 0,
+          "unique_values_count": 5
+        },
+        {
+          "name": "name",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 5,
+          "unique_values": [
+            "AAC audio file",
+            "MPEG audio file",
+            "Protected AAC audio file",
+            "Protected MPEG-4 video file",
+            "Purchased AAC audio file"
+          ]
+        }
+      ],
+      "sample_rows": [
+        {
+          "media_type_id": 1,
+          "name": "MPEG audio file"
+        },
+        {
+          "media_type_id": 2,
+          "name": "Protected AAC audio file"
+        },
+        {
+          "media_type_id": 3,
+          "name": "Protected MPEG-4 video file"
+        },
+        {
+          "media_type_id": 4,
+          "name": "Purchased AAC audio file"
+        },
+        {
+          "media_type_id": 5,
+          "name": "AAC audio file"
+        }
+      ]
+    },
+    "track": {
+      "overview": "The track table contains individual music tracks with their metadata including title, composer, duration, file size, and pricing information. It represents the granular level of music content in a media catalog system.",
+      "use_case": "Analyze music library composition, track popularity and distribution across albums and genres, revenue from track sales, file size optimization, and track duration analysis.",
+      "grain": "one individual music track",
+      "domain_tags": [
+        "media",
+        "music",
+        "sales",
+        "catalog"
+      ],
+      "key_columns": [
+        "track_id",
+        "name",
+        "album_id",
+        "genre_id",
+        "unit_price",
+        "milliseconds"
+      ],
+      "currency": "USD",
+      "timezone": null,
+      "tenant_column": null,
+      "key_notes": "Composer field has 977 null values (27.9% of rows). Unit price has only 2 unique values (0.99 and 1.99). Milliseconds represents track duration. Bytes column has very high variance (min ~39KB to max ~1GB), suggesting diverse media quality or formats. Media_type_id and genre_id reference lookup tables.",
+      "pii_columns": [
+        "composer"
+      ],
+      "row_count": 3503,
+      "column_count": 9,
+      "columns": [
+        {
+          "name": "track_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 3503.0,
+          "avg": 1752.0,
+          "null_count": 0,
+          "unique_values_count": 3503
+        },
+        {
+          "name": "name",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 0,
+          "unique_values_count": 3257
+        },
+        {
+          "name": "album_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 347.0,
+          "avg": 140.9295,
+          "null_count": 0,
+          "unique_values_count": 347
+        },
+        {
+          "name": "media_type_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 5.0,
+          "avg": 1.2084,
+          "null_count": 0,
+          "unique_values_count": 5
+        },
+        {
+          "name": "genre_id",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1.0,
+          "max": 25.0,
+          "avg": 5.7254,
+          "null_count": 0,
+          "unique_values_count": 25
+        },
+        {
+          "name": "composer",
+          "data_type": "text",
+          "type_class": "text",
+          "nullable": true,
+          "null_count": 977,
+          "unique_values_count": 853
+        },
+        {
+          "name": "milliseconds",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 1071.0,
+          "max": 5286953.0,
+          "avg": 393599.2121,
+          "null_count": 0,
+          "unique_values_count": 3080
+        },
+        {
+          "name": "bytes",
+          "data_type": "bigint",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 38747.0,
+          "max": 1059546140.0,
+          "avg": 33510207.0654,
+          "null_count": 0,
+          "unique_values_count": 3501
+        },
+        {
+          "name": "unit_price",
+          "data_type": "double precision",
+          "type_class": "numeric",
+          "nullable": true,
+          "min": 0.99,
+          "max": 1.99,
+          "avg": 1.0508,
+          "null_count": 0,
+          "unique_values_count": 2
+        }
+      ],
+      "sample_rows": [
+        {
+          "track_id": 1,
+          "name": "For Those About To Rock (We Salute You)",
+          "album_id": 1,
+          "media_type_id": 1,
+          "genre_id": 1,
+          "composer": "Angus Young, Malcolm Young, Brian Johnson",
+          "milliseconds": 343719,
+          "bytes": 11170334,
+          "unit_price": 0.99
+        },
+        {
+          "track_id": 2,
+          "name": "Balls to the Wall",
+          "album_id": 2,
+          "media_type_id": 2,
+          "genre_id": 1,
+          "composer": "U. Dirkschneider, W. Hoffmann, H. Frank, P. Baltes, S. Kaufmann, G. Hoffmann",
+          "milliseconds": 342562,
+          "bytes": 5510424,
+          "unit_price": 0.99
+        },
+        {
+          "track_id": 3,
+          "name": "Fast As a Shark",
+          "album_id": 3,
+          "media_type_id": 2,
+          "genre_id": 1,
+          "composer": "F. Baltes, S. Kaufman, U. Dirkscneider & W. Hoffman",
+          "milliseconds": 230619,
+          "bytes": 3990994,
+          "unit_price": 0.99
+        },
+        {
+          "track_id": 4,
+          "name": "Restless and Wild",
+          "album_id": 3,
+          "media_type_id": 2,
+          "genre_id": 1,
+          "composer": "F. Baltes, R.A. Smith-Diesel, S. Kaufman, U. Dirkscneider & W. Hoffman",
+          "milliseconds": 252051,
+          "bytes": 4331779,
+          "unit_price": 0.99
+        },
+        {
+          "track_id": 5,
+          "name": "Princess of the Dawn",
+          "album_id": 3,
+          "media_type_id": 2,
+          "genre_id": 1,
+          "composer": "Deaffy & R.A. Smith-Diesel",
+          "milliseconds": 375418,
+          "bytes": 6290521,
+          "unit_price": 0.99
+        }
+      ]
+    }
+  },
+  "business_rules":[{"_id":"BR_1_9bp","title":"Rule 1","content":"demo rule"}]
+}

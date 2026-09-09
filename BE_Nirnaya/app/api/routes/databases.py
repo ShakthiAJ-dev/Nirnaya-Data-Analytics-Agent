@@ -82,7 +82,7 @@ async def list_databases(request: Request, redis: RedisDep) -> JSONResponse:
 )
 async def get_database(database_id: str, request: Request, redis: RedisDep) -> JSONResponse:
     session_id, _ = await _require_session(request, redis)
-    db = await DatabaseService(session_id, _supabase(request)).get_database(database_id)
+    db = await DatabaseService(session_id, _supabase(request)).get_database(database_id.strip())
     return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True, "data": db})
 
 
@@ -94,7 +94,7 @@ async def get_database(database_id: str, request: Request, redis: RedisDep) -> J
 )
 async def delete_database(database_id: str, request: Request, redis: RedisDep) -> JSONResponse:
     session_id, _ = await _require_session(request, redis)
-    await DatabaseService(session_id, _supabase(request)).delete_database(database_id)
+    await DatabaseService(session_id, _supabase(request)).delete_database(database_id.strip())
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={"success": True, "data": None, "message": "Database deleted."},
@@ -135,6 +135,7 @@ async def upload_file(
         )
 
     svc = DatabaseService(session_id, _supabase(request))
+    database_id = database_id.strip()
     results = await svc.upload_file(database_id, file_bytes, filename)
     db = await svc.get_database(database_id)
 
@@ -149,6 +150,68 @@ async def upload_file(
                 "message": f"Uploaded {len(results)} table(s) successfully.",
             },
         },
+    )
+
+
+@router.get(
+    "/databases/{database_id}/metadata",
+    status_code=status.HTTP_200_OK,
+    summary="Get database metadata",
+    description="Returns the stored metadata JSON for a database.",
+)
+async def get_metadata(database_id: str, request: Request, redis: RedisDep) -> JSONResponse:
+    session_id, _ = await _require_session(request, redis)
+    metadata = await DatabaseService(session_id, _supabase(request)).get_metadata(database_id.strip())
+    if metadata is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"success": False, "error": {"code": "NOT_FOUND", "message": "Metadata not yet generated for this database."}},
+        )
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True, "data": metadata})
+
+
+@router.put(
+    "/databases/{database_id}/business-rules",
+    status_code=status.HTTP_200_OK,
+    summary="Update business rules",
+    description="Replace the business rules list for this database. Send the complete list each time.",
+)
+async def update_business_rules(
+    database_id: str,
+    request: Request,
+    redis: RedisDep,
+) -> JSONResponse:
+    from pydantic import BaseModel
+    class BusinessRulesBody(BaseModel):
+        rules: list[dict]
+
+    body = BusinessRulesBody.model_validate(await request.json())
+    session_id, _ = await _require_session(request, redis)
+    metadata = await DatabaseService(session_id, _supabase(request)).update_business_rules(
+        database_id.strip(), body.rules
+    )
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"success": True, "data": {"business_rules": metadata.get("business_rules", [])}, "message": "Business rules updated."},
+    )
+
+
+@router.delete(
+    "/databases/{database_id}/tables/{table_name}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete a table from a database",
+    description="Drops the Postgres table, removes it from metadata, and deletes the upload record.",
+)
+async def delete_table(
+    database_id: str, table_name: str, request: Request, redis: RedisDep
+) -> JSONResponse:
+    session_id, _ = await _require_session(request, redis)
+    await DatabaseService(session_id, _supabase(request)).delete_table(
+        database_id.strip(), table_name.strip()
+    )
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"success": True, "data": None, "message": f"Table '{table_name}' deleted."},
     )
 
 

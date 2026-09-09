@@ -19,6 +19,7 @@ import io
 import json
 import re
 import textwrap
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -94,6 +95,49 @@ def _pd_type_to_pg(dtype_str: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Postgres type classification (for column stats strategy)
+# ---------------------------------------------------------------------------
+
+_NUMERIC_TYPES = frozenset({
+    "integer", "bigint", "smallint", "numeric", "decimal",
+    "real", "double precision", "float4", "float8", "int2", "int4", "int8",
+    "money",
+})
+_DATETIME_TYPES = frozenset({
+    "timestamp", "timestamp without time zone", "timestamp with time zone",
+    "timestamptz", "date", "time", "time without time zone", "time with time zone",
+    "timetz", "interval",
+})
+_BOOLEAN_TYPES = frozenset({"boolean", "bool"})
+_UUID_TYPES = frozenset({"uuid"})
+_JSON_TYPES = frozenset({"json", "jsonb"})
+_ARRAY_TYPES = frozenset({"array", "anyarray", "integer[]", "text[]", "bigint[]"})
+_BINARY_TYPES = frozenset({"bytea"})
+_ENUM_TYPES = frozenset({"user-defined"})
+
+
+def _type_class(data_type: str) -> str:
+    dt = data_type.lower().strip()
+    if dt in _NUMERIC_TYPES:
+        return "numeric"
+    if dt in _DATETIME_TYPES:
+        return "datetime"
+    if dt in _BOOLEAN_TYPES:
+        return "boolean"
+    if dt in _UUID_TYPES:
+        return "uuid"
+    if dt in _JSON_TYPES:
+        return "json"
+    if dt in _ARRAY_TYPES or dt.endswith("[]"):
+        return "array"
+    if dt in _BINARY_TYPES:
+        return "binary"
+    if dt in _ENUM_TYPES:
+        return "enum"
+    return "text"
+
+
+# ---------------------------------------------------------------------------
 # Lazy pandas import
 # ---------------------------------------------------------------------------
 
@@ -143,6 +187,140 @@ class DatabaseService:
                 )
                 return
             raise DatabaseException(f"SQL execution failed: {exc}") from exc
+
+    async def _run_query(self, sql: str) -> list[dict[str, Any]]:
+        """Run a SELECT query via exec_query RPC, return rows as list of dicts."""
+        try:
+            resp = await self._supa.admin.rpc("exec_query", {"sql": sql}).execute()
+            data = resp.data
+            if data is None:
+                return []
+            if isinstance(data, str):
+                data = json.loads(data)
+            return data if isinstance(data, list) else []
+        except Exception as exc:
+            logger.warning("exec_query_failed", sql=sql[:120], error=str(exc))
+            return []
+
+    async def _query_table_stats(
+        self, schema_name: str, table_name: str
+    ) -> dict[str, Any]:
+        """
+        Query Postgres directly for column metadata, stats, and sample rows.
+
+        Returns
+        -------
+        {
+            "columns": [...],       # per-column stat objects
+            "row_count": int,
+            "column_count": int,
+            "sample_rows": [...]    # 5 rows, _row_id excluded
+        }
+        """
+        # Column info from information_schema
+        col_info = await self._run_query(
+            f"SELECT column_name, data_type, is_nullable "
+            f"FROM information_schema.columns "
+            f"WHERE table_schema = '{schema_name}' AND table_name = '{table_name}' "
+            f"ORDER BY ordinal_position"
+        )
+
+        # Row count
+        rc = await self._run_query(
+            f"SELECT COUNT(*) AS row_count FROM {schema_name}.{table_name}"
+        )
+        row_count = int(rc[0]["row_count"]) if rc else 0
+
+        columns: list[dict[str, Any]] = []
+        visible_col_names: list[str] = []
+
+        for ci in col_info:
+            col_name: str = ci["column_name"]
+            if col_name == "_row_id":
+                continue
+
+            data_type: str = ci["data_type"]
+            nullable: bool = ci.get("is_nullable", "YES").upper() == "YES"
+            tc = _type_class(data_type)
+            visible_col_names.append(col_name)
+
+            col_meta: dict[str, Any] = {
+                "name": col_name,
+                "data_type": data_type,
+                "type_class": tc,
+                "nullable": nullable,
+            }
+
+            if tc == "numeric":
+                rows = await self._run_query(
+                    f'SELECT MIN("{col_name}") AS min_val, '
+                    f'MAX("{col_name}") AS max_val, '
+                    f'ROUND(AVG("{col_name}"::numeric), 4) AS avg_val, '
+                    f'COUNT(*) FILTER (WHERE "{col_name}" IS NULL) AS null_count, '
+                    f'COUNT(DISTINCT "{col_name}") AS unique_values_count '
+                    f'FROM {schema_name}.{table_name}'
+                )
+                if rows:
+                    s = rows[0]
+                    col_meta["min"] = float(s["min_val"]) if s["min_val"] is not None else None
+                    col_meta["max"] = float(s["max_val"]) if s["max_val"] is not None else None
+                    col_meta["avg"] = float(s["avg_val"]) if s["avg_val"] is not None else None
+                    col_meta["null_count"] = int(s["null_count"])
+                    col_meta["unique_values_count"] = int(s["unique_values_count"])
+
+            elif tc in ("datetime",):
+                rows = await self._run_query(
+                    f'SELECT MIN("{col_name}"::text) AS min_val, '
+                    f'MAX("{col_name}"::text) AS max_val, '
+                    f'COUNT(*) FILTER (WHERE "{col_name}" IS NULL) AS null_count, '
+                    f'COUNT(DISTINCT "{col_name}") AS unique_values_count '
+                    f'FROM {schema_name}.{table_name}'
+                )
+                if rows:
+                    s = rows[0]
+                    col_meta["min"] = s.get("min_val")
+                    col_meta["max"] = s.get("max_val")
+                    col_meta["null_count"] = int(s["null_count"])
+                    col_meta["unique_values_count"] = int(s["unique_values_count"])
+
+            else:
+                # text, uuid, boolean, json, array, binary, enum, other
+                rows = await self._run_query(
+                    f'SELECT COUNT(DISTINCT "{col_name}") AS unique_values_count, '
+                    f'COUNT(*) FILTER (WHERE "{col_name}" IS NULL) AS null_count '
+                    f'FROM {schema_name}.{table_name}'
+                )
+                if rows:
+                    s = rows[0]
+                    unique_count = int(s["unique_values_count"])
+                    col_meta["null_count"] = int(s["null_count"])
+                    col_meta["unique_values_count"] = unique_count
+
+                    if unique_count < 50:
+                        val_rows = await self._run_query(
+                            f'SELECT DISTINCT "{col_name}" AS val '
+                            f'FROM {schema_name}.{table_name} '
+                            f'WHERE "{col_name}" IS NOT NULL ORDER BY val LIMIT 50'
+                        )
+                        col_meta["unique_values"] = [r["val"] for r in val_rows]
+
+            columns.append(col_meta)
+
+        # Sample rows (5, _row_id excluded)
+        if visible_col_names:
+            cols_sql = ", ".join(f'"{c}"' for c in visible_col_names)
+            sample_rows = await self._run_query(
+                f"SELECT {cols_sql} FROM {schema_name}.{table_name} LIMIT 5"
+            )
+        else:
+            sample_rows = []
+
+        return {
+            "columns": columns,
+            "row_count": row_count,
+            "column_count": len(columns),
+            "sample_rows": sample_rows,
+        }
 
     # ------------------------------------------------------------------
     # Create
@@ -200,6 +378,8 @@ class DatabaseService:
     # ------------------------------------------------------------------
 
     async def list_databases(self) -> list[dict[str, Any]]:
+        import asyncio
+
         try:
             resp = await (
                 self._supa.admin.table(DATABASES_TABLE)
@@ -208,9 +388,23 @@ class DatabaseService:
                 .order("created_at", desc=False)
                 .execute()
             )
-            return resp.data or []
+            databases = resp.data or []
         except Exception as exc:
             raise DatabaseException(f"List databases failed: {exc}") from exc
+
+        async def _attach_metadata(db: dict[str, Any]) -> dict[str, Any]:
+            path = db.get("metadata_path")
+            if not path:
+                db["metadata"] = None
+                return db
+            try:
+                raw = await self._supa.admin.storage.from_(BUCKET).download(path)
+                db["metadata"] = json.loads(raw) if raw else None
+            except Exception:
+                db["metadata"] = None
+            return db
+
+        return list(await asyncio.gather(*[_attach_metadata(db) for db in databases]))
 
     # ------------------------------------------------------------------
     # Get
@@ -339,6 +533,20 @@ class DatabaseService:
                 f"Unsupported file type '.{ext}'. Supported: csv, parquet, xlsx, xls"
             )
 
+        # Conflict check: reject if any table name already exists in this schema
+        new_table_names = [name for name, _ in dataframes]
+        existing_info = await self._run_query(
+            f"SELECT table_name FROM information_schema.tables "
+            f"WHERE table_schema = '{schema_name}'"
+        )
+        existing_names = {row["table_name"] for row in existing_info}
+        conflicts = [n for n in new_table_names if n in existing_names]
+        if conflicts:
+            raise ValidationException(
+                f"Table(s) already exist in this database: {', '.join(conflicts)}. "
+                "Delete them first or rename the file/sheet."
+            )
+
         results = []
         tables_for_metadata: dict[str, dict] = {}
 
@@ -365,7 +573,7 @@ class DatabaseService:
 
         # Generate and store metadata
         metadata_path = await self._generate_and_store_metadata(
-            database_id, db["name"], tables_for_metadata
+            database_id, db["name"], db["schema_name"], list(tables_for_metadata.keys())
         )
         if metadata_path:
             try:
@@ -420,24 +628,76 @@ class DatabaseService:
         self,
         database_id: str,
         db_name: str,
-        tables_data: dict[str, dict],
+        schema_name: str,
+        table_names: list[str],
     ) -> str | None:
-        tables_meta: dict[str, dict] = {}
-        for table_name, td in tables_data.items():
-            df = td["df"]
-            stats = self._compute_stats(df)
-            sample_rows = df.head(5).where(df.head(5).notna(), other=None).to_dict(orient="records")
-            tables_meta[table_name] = {
-                "column_stats": stats,
-                "sample_rows": sample_rows,
-                "row_count": td["result"]["row_count"],
+        """
+        1. Load existing metadata from storage (to preserve business_rules).
+        2. Query Postgres for factual stats per table.
+        3. Call LLM for semantic enrichment (per-table overviews, tags, etc.).
+        4. Merge and upload final metadata JSON.
+        """
+        path = f"{self._session_id}/metadata/{database_id}.json"
+
+        # Load existing metadata to preserve tables already there + business_rules
+        existing_tables: dict[str, dict] = {}
+        existing_business_rules: list[dict] = []
+        try:
+            raw = await self._supa.admin.storage.from_(BUCKET).download(path)
+            if raw:
+                existing = json.loads(raw)
+                existing_tables = existing.get("tables", {})
+                existing_business_rules = existing.get("business_rules", [])
+        except Exception:
+            pass  # no prior metadata — start fresh
+
+        # Query factual stats only for the new tables being added
+        query_stats: dict[str, dict] = {}
+        for table_name in table_names:
+            try:
+                query_stats[table_name] = await self._query_table_stats(schema_name, table_name)
+            except Exception as exc:
+                logger.warning("query_stats_failed", table=table_name, error=str(exc))
+                query_stats[table_name] = {
+                    "columns": [], "row_count": 0, "column_count": 0, "sample_rows": []
+                }
+
+        # LLM semantic enrichment for new tables only
+        llm_result = await self._call_llm_for_metadata(db_name, query_stats)
+
+        # Build entries for new tables
+        new_tables: dict[str, dict] = {}
+        for table_name, qs in query_stats.items():
+            llm_table = (llm_result or {}).get("tables", {}).get(table_name, {})
+            new_tables[table_name] = {
+                "overview":      llm_table.get("overview", f"Table '{table_name}'."),
+                "use_case":      llm_table.get("use_case", ""),
+                "grain":         llm_table.get("grain", "One row per record."),
+                "domain_tags":   llm_table.get("domain_tags", []),
+                "key_columns":   llm_table.get("key_columns", []),
+                "currency":      llm_table.get("currency"),
+                "timezone":      llm_table.get("timezone"),
+                "tenant_column": llm_table.get("tenant_column"),
+                "key_notes":     llm_table.get("key_notes", ""),
+                "pii_columns":   llm_table.get("pii_columns", []),
+                "row_count":     qs["row_count"],
+                "column_count":  qs["column_count"],
+                "columns":       qs["columns"],
+                "sample_rows":   qs["sample_rows"],
             }
 
-        metadata = await self._call_llm_for_metadata(db_name, tables_meta)
-        if metadata is None:
-            metadata = self._build_basic_metadata(db_name, tables_meta)
+        # Merge: existing tables first, then new/updated entries
+        merged_tables = {**existing_tables, **new_tables}
 
-        path = f"{self._session_id}/metadata/{database_id}.json"
+        metadata: dict[str, Any] = {
+            "database_name":  db_name,
+            "schema_name":    schema_name,
+            "generated_at":   datetime.now(timezone.utc).isoformat(),
+            "generated_by":   "nirnaya-llm" if llm_result else "nirnaya-stats-fallback",
+            "business_rules": existing_business_rules,
+            "tables":         merged_tables,
+        }
+
         try:
             await self._supa.upload_file(
                 BUCKET,
@@ -482,8 +742,17 @@ class DatabaseService:
             stats = td["column_stats"]
             tables[table_name] = {
                 "overview": f"Table '{table_name}' with {td['row_count']} rows.",
+                "use_case": f"Query and analyse data from '{table_name}'.",
                 "grain": "One row per record.",
+                "domain_tags": [],
+                "key_columns": [s["name"] for s in stats[:5]],
+                "currency": None,
+                "timezone": None,
+                "tenant_column": None,
+                "key_notes": "",
+                "pii_columns": [],
                 "row_count": td["row_count"],
+                "column_count": len(stats),
                 "columns": [
                     {
                         "name": s["name"],
@@ -499,72 +768,74 @@ class DatabaseService:
                     for s in stats
                 ],
                 "sample_rows": td["sample_rows"],
-                "domain_tags": [],
-                "pii_columns": [],
-                "business_rules": [],
             }
         return {
             "database_name": db_name,
             "database_overview": f"User-uploaded database '{db_name}'.",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "generated_by": "nirnaya-stats-fallback",
+            "business_rules": [],
             "tables": tables,
         }
 
     async def _call_llm_for_metadata(
         self,
         db_name: str,
-        tables_meta: dict[str, dict],
+        query_stats: dict[str, dict],
     ) -> dict[str, Any] | None:
-        """Call Bedrock Haiku to generate rich metadata. Falls back to None on any failure."""
+        """
+        Call Bedrock Haiku for semantic metadata only.
+        LLM receives column stats + sample rows; returns overview/use_case/grain/
+        domain_tags/key_columns/currency/timezone/tenant_column/key_notes/pii_columns.
+        No column details, no business_rules — those are handled separately.
+        Returns None on any failure (caller uses fallback).
+        """
         try:
             from langchain_aws import ChatBedrockConverse
             from langchain_core.messages import HumanMessage, SystemMessage
 
-            table_summaries = []
-            for table_name, td in tables_meta.items():
-                cols_desc = "\n".join(
-                    f"  - {s['name']} ({s['pg_type']}, {s['unique_count']} unique, {s['null_count']} nulls)"
-                    + (f", range [{s.get('min'):.2f}, {s.get('max'):.2f}]" if "min" in s else "")
-                    for s in td["column_stats"]
-                )
-                sample = json.dumps(td["sample_rows"][:3], default=str)
+            table_summaries: list[str] = []
+            for table_name, qs in query_stats.items():
+                col_lines = []
+                for c in qs["columns"]:
+                    line = f"  - {c['name']} ({c['data_type']}, class={c['type_class']}, nullable={c['nullable']}, unique_values_count={c.get('unique_values_count', '?')}, null_count={c.get('null_count', '?')})"
+                    if "min" in c:
+                        line += f", min={c['min']}, max={c['max']}, avg={c['avg']}"
+                    if "unique_values" in c:
+                        vals = c["unique_values"][:10]
+                        line += f", sample_values={vals}"
+                    col_lines.append(line)
+
                 table_summaries.append(
-                    f"Table: {table_name}\nColumns:\n{cols_desc}\nSample rows: {sample}"
+                    f"TABLE: {table_name} ({qs['row_count']} rows, {qs['column_count']} columns)\n"
+                    + "\n".join(col_lines)
+                    + f"\nSample rows (first 3): {json.dumps(qs['sample_rows'][:3], default=str)}"
                 )
 
             system_prompt = textwrap.dedent("""
-                You are a database documentation assistant. Given column statistics and sample data,
-                generate structured metadata as a valid JSON object with this exact structure:
+                You are a database documentation assistant. Analyse the column statistics and sample rows provided.
+                Return ONLY a JSON object (no markdown, no explanation) with this exact structure:
+
                 {
-                  "database_name": "<name>",
-                  "database_overview": "<2-3 sentence description>",
-                  "generated_at": "<ISO timestamp>",
-                  "generated_by": "nirnaya-llm",
                   "tables": {
                     "<table_name>": {
-                      "overview": "<1-2 sentence description>",
+                      "overview": "<2-3 sentences describing what this table contains and its purpose>",
+                      "use_case": "<what business questions can be answered from this table>",
                       "grain": "<one row represents one ...>",
-                      "row_count": <number>,
-                      "columns": [
-                        {
-                          "name": "<col>",
-                          "type": "<PG type>",
-                          "description": "<brief description>",
-                          "nullable": <bool>,
-                          "unique_count": <number>,
-                          "null_count": <number>,
-                          "sample_values": [<up to 5 values>]
-                        }
-                      ],
-                      "sample_rows": [<up to 5 rows>],
-                      "domain_tags": ["<tag>"],
-                      "pii_columns": ["<col if PII>"],
-                      "business_rules": ["<rule if obvious>"]
+                      "domain_tags": ["<relevant business domain tags, e.g. finance, sales, hr>"],
+                      "key_columns": ["<most important columns for analysis>"],
+                      "currency": "<currency code if monetary columns exist, else null>",
+                      "timezone": "<timezone if datetime columns exist, else null>",
+                      "tenant_column": "<column that partitions by tenant/customer if any, else null>",
+                      "key_notes": "<important caveats analysts must know: null handling, units, edge cases. Empty string if none.>",
+                      "pii_columns": ["<column names containing PII such as names, emails, addresses. Empty list if none.>"]
                     }
                   }
                 }
-                Return ONLY valid JSON. No markdown. No explanation.
+
+                Rules:
+                - Infer currency, timezone, pii_columns from column names and sample values.
+                - Return ONLY valid JSON.
             """).strip()
 
             llm = ChatBedrockConverse(
@@ -576,8 +847,8 @@ class DatabaseService:
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=(
                     f"Database name: {db_name}\n\n"
-                    f"Table statistics:\n\n" + "\n\n".join(table_summaries) +
-                    "\n\nGenerate the metadata JSON."
+                    + "\n\n".join(table_summaries)
+                    + "\n\nGenerate the metadata JSON."
                 )),
             ])
 
@@ -588,22 +859,117 @@ class DatabaseService:
                 )
             content = content.strip()
             if content.startswith("```"):
-                content = content.split("```")[1]
+                parts = content.split("```")
+                content = parts[1] if len(parts) > 1 else content
                 if content.startswith("json"):
                     content = content[4:]
                 content = content.strip()
 
-            metadata = json.loads(content)
-            # Ensure actual row counts and sample rows from ingested data
-            for table_name, td in tables_meta.items():
-                if table_name in metadata.get("tables", {}):
-                    metadata["tables"][table_name]["row_count"] = td["row_count"]
-                    metadata["tables"][table_name]["sample_rows"] = td["sample_rows"]
-            return metadata
+            return json.loads(content)
 
         except Exception as exc:
             logger.warning("llm_metadata_generation_failed", error=str(exc))
             return None
+
+    # ------------------------------------------------------------------
+    # Metadata helpers
+    # ------------------------------------------------------------------
+
+    async def get_metadata(self, database_id: str) -> dict[str, Any] | None:
+        """Download and return the metadata JSON for a database. None if not found."""
+        db = await self.get_database(database_id)
+        path = db.get("metadata_path")
+        if not path:
+            return None
+        try:
+            raw = await self._supa.admin.storage.from_(BUCKET).download(path)
+            return json.loads(raw) if raw else None
+        except Exception as exc:
+            logger.warning("get_metadata_failed", database_id=database_id, error=str(exc))
+            return None
+
+    async def update_business_rules(
+        self,
+        database_id: str,
+        rules: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """
+        Replace business_rules in the stored metadata with the provided list.
+        FE sends the complete list each time.
+        Returns the updated metadata dict.
+        """
+        db = await self.get_database(database_id)
+        path = db.get("metadata_path")
+        if not path:
+            raise NotFoundException(f"No metadata found for database {database_id!r}.")
+
+        metadata = await self.get_metadata(database_id)
+        if metadata is None:
+            raise NotFoundException("Metadata file not found in storage.")
+
+        metadata["business_rules"] = rules
+        try:
+            await self._supa.upload_file(
+                BUCKET,
+                path,
+                json.dumps(metadata, indent=2, default=str).encode("utf-8"),
+                content_type="application/json",
+                upsert=True,
+            )
+        except Exception as exc:
+            raise DatabaseException(f"Failed to update business rules: {exc}") from exc
+
+        logger.info("business_rules_updated", database_id=database_id, count=len(rules))
+        return metadata
+
+    # ------------------------------------------------------------------
+    # Delete table
+    # ------------------------------------------------------------------
+
+    async def delete_table(self, database_id: str, table_name: str) -> None:
+        """
+        Drop a table from the database schema and remove it from metadata.
+        Also deletes the file_uploads record for that table.
+        """
+        db = await self.get_database(database_id)
+        schema_name = db["schema_name"]
+
+        # Drop from Postgres
+        await self._exec_sql(
+            f'DROP TABLE IF EXISTS {schema_name}."{table_name}" CASCADE;'
+        )
+
+        # Remove from metadata JSON
+        metadata_path = db.get("metadata_path")
+        if metadata_path:
+            try:
+                raw = await self._supa.admin.storage.from_(BUCKET).download(metadata_path)
+                if raw:
+                    metadata = json.loads(raw)
+                    metadata.get("tables", {}).pop(table_name, None)
+                    await self._supa.upload_file(
+                        BUCKET,
+                        metadata_path,
+                        json.dumps(metadata, indent=2, default=str).encode("utf-8"),
+                        content_type="application/json",
+                        upsert=True,
+                    )
+            except Exception as exc:
+                logger.warning("delete_table_metadata_update_failed", error=str(exc))
+
+        # Delete file_uploads record
+        try:
+            await (
+                self._supa.admin.table(FILE_UPLOADS_TABLE)
+                .delete()
+                .eq("database_id", database_id)
+                .eq("table_name", table_name)
+                .execute()
+            )
+        except Exception as exc:
+            logger.warning("delete_table_file_upload_record_failed", error=str(exc))
+
+        logger.info("table_deleted", database_id=database_id, table=table_name)
 
     # ------------------------------------------------------------------
     # Session cleanup
@@ -704,6 +1070,18 @@ class DatabaseService:
                 ON public.file_uploads(session_id);
         """).strip()
 
+        # exec_query: used for SELECT queries in _run_query
+        exec_query_fn = textwrap.dedent("""
+            CREATE OR REPLACE FUNCTION exec_query(sql text)
+            RETURNS json LANGUAGE plpgsql SECURITY DEFINER AS $$
+            DECLARE result json;
+            BEGIN
+              EXECUTE format('SELECT json_agg(t) FROM (%s) t', sql) INTO result;
+              RETURN COALESCE(result, '[]'::json);
+            END;
+            $$;
+        """).strip()
+
         try:
             await supabase.admin.rpc("exec_ddl", {"sql": ddl}).execute()
             logger.info("app_tables_initialized")
@@ -715,8 +1093,15 @@ class DatabaseService:
                     hint=(
                         "Run in Supabase SQL editor: "
                         "CREATE OR REPLACE FUNCTION exec_ddl(sql text) "
-                        "RETURNS void LANGUAGE plpgsql AS $$ BEGIN EXECUTE sql; END; $$;"
+                        "RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN EXECUTE sql; END; $$;"
                     ),
                 )
+                return
             else:
                 logger.error("app_tables_init_failed", error=str(exc))
+
+        try:
+            await supabase.admin.rpc("exec_ddl", {"sql": exec_query_fn}).execute()
+            logger.info("exec_query_function_ready")
+        except Exception as exc:
+            logger.warning("exec_query_fn_setup_failed", error=str(exc))
