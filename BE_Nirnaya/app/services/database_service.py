@@ -588,6 +588,50 @@ class DatabaseService:
 
         return results
 
+    async def get_presigned_upload_url(self, database_id: str, filename: str) -> dict[str, Any]:
+        """Generate a presigned URL for direct FE upload to Supabase Storage."""
+        # Verify db ownership
+        await self.get_database(database_id)
+        
+        file_path = f"{self._session_id}/databases/{database_id}/{uuid.uuid4().hex}_{filename}"
+        
+        try:
+            # Note: create_signed_upload_url returns a dict like {'signedUrl': '...'}
+            resp = await self._supa.admin.storage.from_(BUCKET).create_signed_upload_url(file_path)
+            # The python SDK may return a dict or an object depending on version. We'll handle both.
+            url = ""
+            if isinstance(resp, dict):
+                url = resp.get("signedUrl") or resp.get("signedURL", "")
+            elif hasattr(resp, "signedUrl"):
+                url = resp.signedUrl
+            else:
+                url = str(resp)
+
+            return {
+                "upload_url": url,
+                "file_path": file_path,
+                "expires_in": 3600
+            }
+        except Exception as exc:
+            raise DatabaseException(f"Failed to generate presigned upload URL: {exc}") from exc
+
+    async def process_presigned_upload(self, database_id: str, file_path: str, filename: str) -> list[dict[str, Any]]:
+        """Download file from presigned path, process it, then delete from storage."""
+        try:
+            file_bytes = await self._supa.admin.storage.from_(BUCKET).download(file_path)
+            if not file_bytes:
+                raise ValidationException("File not found or empty in storage.")
+                
+            results = await self.upload_file(database_id, file_bytes, filename)
+            
+            await self._supa.admin.storage.from_(BUCKET).remove([file_path])
+            
+            return results
+        except ValidationException:
+            raise
+        except Exception as exc:
+            raise DatabaseException(f"Failed to process upload: {exc}") from exc
+
     async def _ingest_dataframe(
         self, schema_name: str, table_name: str, df: Any
     ) -> dict[str, Any]:

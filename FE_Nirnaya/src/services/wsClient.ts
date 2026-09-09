@@ -192,9 +192,9 @@ export class NirnayaWSClient {
   // ------------------------------------------------------------------
 
   /** Send a chat message to the agent. Returns the transaction ID. */
-  sendChatMessage(prompt: string, transactionId?: string): string {
+  sendChatMessage(prompt: string, extra?: Record<string, unknown>, transactionId?: string): string {
     const txId = transactionId ?? this._genTxId();
-    this._sendFrame('chat_message', txId, prompt);
+    this._sendFrame('chat_message', txId, prompt, extra);
     return txId;
   }
 

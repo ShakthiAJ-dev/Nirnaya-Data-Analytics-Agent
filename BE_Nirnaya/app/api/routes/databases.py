@@ -102,41 +102,62 @@ async def delete_database(database_id: str, request: Request, redis: RedisDep) -
 
 
 @router.post(
-    "/databases/{database_id}/upload",
-    status_code=status.HTTP_201_CREATED,
-    summary="Upload a file to a database",
-    description=(
-        "Parses CSV / Parquet / Excel and creates tables in the database schema. "
-        "Excel files produce one table per sheet. "
-        "Generates LLM metadata and stores it in Supabase Storage."
-    ),
+    "/databases/{database_id}/upload/presign",
+    status_code=status.HTTP_200_OK,
+    summary="Generate presigned upload URL",
+    description="Returns a short-lived URL for the FE to directly upload to Supabase Storage.",
 )
-async def upload_file(
+async def upload_presign(
     database_id: str,
     request: Request,
     redis: RedisDep,
-    file: UploadFile = File(...),
 ) -> JSONResponse:
+    from pydantic import BaseModel
+    class PresignBody(BaseModel):
+        filename: str
+
+    body = PresignBody.model_validate(await request.json())
     session_id, _ = await _require_session(request, redis)
 
-    filename = file.filename or "upload"
+    svc = DatabaseService(session_id, _supabase(request))
+    data = await svc.get_presigned_upload_url(database_id.strip(), body.filename)
+
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True, "data": data})
+
+
+@router.post(
+    "/databases/{database_id}/upload/process",
+    status_code=status.HTTP_201_CREATED,
+    summary="Process an uploaded file from a presigned path",
+    description=(
+        "Downloads the file from storage, parses it into Postgres tables, "
+        "generates LLM metadata, and deletes the original file."
+    ),
+)
+async def upload_process(
+    database_id: str,
+    request: Request,
+    redis: RedisDep,
+) -> JSONResponse:
+    from pydantic import BaseModel
+    class ProcessBody(BaseModel):
+        file_path: str
+        filename: str
+
+    body = ProcessBody.model_validate(await request.json())
+    session_id, _ = await _require_session(request, redis)
+
+    filename = body.filename or "upload"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext not in ALLOWED_EXTENSIONS:
         raise ValidationException(
             f"File type '.{ext}' not supported. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
         )
 
-    file_bytes = await file.read()
-    if not file_bytes:
-        raise ValidationException("Uploaded file is empty.")
-    if len(file_bytes) > MAX_FILE_SIZE:
-        raise ValidationException(
-            f"File size {len(file_bytes) // 1024 // 1024} MB exceeds the {MAX_FILE_SIZE // 1024 // 1024} MB limit."
-        )
-
     svc = DatabaseService(session_id, _supabase(request))
     database_id = database_id.strip()
-    results = await svc.upload_file(database_id, file_bytes, filename)
+    
+    results = await svc.process_presigned_upload(database_id, body.file_path, filename)
     db = await svc.get_database(database_id)
 
     return JSONResponse(

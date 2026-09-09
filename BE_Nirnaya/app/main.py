@@ -34,6 +34,7 @@ from app.api.routes.health import router as health_router
 from app.api.routes.session import router as session_router
 from app.api.routes.projects import router as projects_router
 from app.api.routes.databases import router as databases_router
+from app.api.routes.demo import router as demo_router
 from app.websocket.ws_agent import router as ws_agent_router
 from app.services.database_service import DatabaseService
 from app.core.config import settings
@@ -144,6 +145,7 @@ app.include_router(health_router, prefix=settings.api_v1_prefix)
 app.include_router(session_router, prefix=settings.api_v1_prefix)
 app.include_router(projects_router, prefix=settings.api_v1_prefix)
 app.include_router(databases_router, prefix=settings.api_v1_prefix)
+app.include_router(demo_router, prefix=settings.api_v1_prefix)
 app.include_router(ws_agent_router)  # /ws/agent — no api/v1 prefix
 
 

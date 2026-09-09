@@ -85,7 +85,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         <div className="chat-header-title-box">
           <div className="chat-header-project">
             <Database size={16} style={{ color: 'var(--accent-cyan)' }} />
-            <span>{currentProject.name}</span>
+            <span>{currentProject?.title || currentProject?.name || 'Default Project'}</span>
           </div>
           <span className="header-slash">/</span>
           <span className="chat-header-session">Data Analytics Chat</span>
@@ -133,7 +133,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <p className="empty-subtext">
               Welcome to <span className="kannada-accent-pill">Nirnaya</span>. Ask complex
               business questions, inspect uploaded data files, or simulate strategic decisions
-              across <strong style={{ color: '#ffffff' }}>{currentProject.name}</strong>.
+              across <strong style={{ color: '#ffffff' }}>{currentProject?.name || 'your datasets'}</strong>.
             </p>
 
             {/* Prompt to add API keys if none configured */}
