@@ -101,6 +101,48 @@ def _model(config: RunnableConfig) -> tuple[str, str | None]:
     return cfg.get("model", _DEFAULT_MODEL), cfg.get("provider")
 
 
+def _extract_reasoning(response: AIMessage) -> str:
+    """
+    Extract the model's actual reasoning/thinking text from an AIMessage.
+
+    Handles:
+    - Anthropic extended_thinking: content blocks with type="thinking"
+    - Bedrock / other providers: response_metadata.get("thinking")
+    - Plain text fallback: first ~300 chars of text content if no tool calls
+    Returns an empty string if none found (never crashes).
+    """
+    try:
+        # 1. Anthropic extended_thinking — content is a list of blocks
+        if isinstance(response.content, list):
+            for block in response.content:
+                if isinstance(block, dict) and block.get("type") == "thinking":
+                    thinking = block.get("thinking", "")
+                    if thinking:
+                        return str(thinking)[:600]
+
+        # 2. Bedrock / response_metadata thinking field
+        metadata = getattr(response, "response_metadata", {}) or {}
+        thinking = metadata.get("thinking") or metadata.get("reasoning")
+        if thinking:
+            return str(thinking)[:600]
+
+        # 3. Additional kwargs (some providers surface it here)
+        additional = getattr(response, "additional_kwargs", {}) or {}
+        thinking = additional.get("thinking") or additional.get("reasoning")
+        if thinking:
+            return str(thinking)[:600]
+
+        # 4. Plain text fallback — only use if no tool calls (avoid dumping JSON)
+        tool_calls = getattr(response, "tool_calls", []) or []
+        if not tool_calls and isinstance(response.content, str) and response.content.strip():
+            # Trim to a reasonable size for the UI
+            return response.content.strip()[:400]
+
+    except Exception:
+        pass
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Node: skim_tables
 # Pure context assembly — no LLM, just builds the discovery_messages seed.
@@ -165,6 +207,14 @@ async def discovery_loop_node(state: OrchestratorState, config: RunnableConfig) 
 
     iteration = state.get("discovery_iterations", 0)
 
+    logger.info(
+        "discovery_loop_start",
+        turn_id=state["turn_id"],
+        iteration=iteration,
+        message_count=len(state.get("discovery_messages", [])),
+        user_message=state["user_message"][:120],
+    )
+
     seq = await seq_counter.next()
     await ws_send(make_step(
         chat_id=state["chat_id"],
@@ -186,6 +236,15 @@ async def discovery_loop_node(state: OrchestratorState, config: RunnableConfig) 
 
     try:
         model, provider = _model(config)
+        logger.info(
+            "discovery_loop_llm_call",
+            turn_id=state["turn_id"],
+            iteration=iteration,
+            model=model,
+            provider=provider,
+            tools=[t.name for t in orchestrator_tools],
+            message_count=len(state["discovery_messages"]),
+        )
         response: AIMessage = await llm_service.ainvoke(
             state["discovery_messages"],
             model=model,
@@ -195,12 +254,38 @@ async def discovery_loop_node(state: OrchestratorState, config: RunnableConfig) 
             provider=provider,
         )
     except Exception as exc:
-        logger.error("discovery_loop_llm_error", error=str(exc))
+        logger.error("discovery_loop_llm_error", turn_id=state["turn_id"], error=str(exc))
         # Return error state — will route to direct_response with error message
         return {
             "discovery_messages": [AIMessage(content=f"Error during discovery: {exc}")],
             "discovery_iterations": iteration + 1,
         }
+
+    tool_calls = getattr(response, "tool_calls", []) or []
+    logger.info(
+        "discovery_loop_llm_response",
+        turn_id=state["turn_id"],
+        iteration=iteration,
+        has_tool_calls=bool(tool_calls),
+        tool_names=[tc["name"] for tc in tool_calls],
+        content_preview=(response.content if isinstance(response.content, str) else str(response.content))[:200],
+    )
+
+    # Extract real reasoning text from the model response
+    reasoning_text = _extract_reasoning(response)
+
+    # Emit a "done" step with the LLM's actual reasoning
+    seq = await seq_counter.next()
+    await ws_send(make_step(
+        chat_id=state["chat_id"],
+        turn_id=state["turn_id"],
+        seq=seq,
+        name=StepName.ANALYZING_QUESTION,
+        status="done",
+        title="Question Analyzed" if iteration == 0 else "Discovery Continued",
+        detail=f"Completed analysis iteration {iteration + 1}",
+        reasoning=reasoning_text,
+    ))
 
     return {
         "discovery_messages": [response],
@@ -231,13 +316,16 @@ def route_after_discovery(state: OrchestratorState) -> Literal["tool_executor", 
     last = messages[-1]
     tool_calls = getattr(last, "tool_calls", []) or []
     if not tool_calls:
+        logger.info("discovery_routing", decision="decide_node", reason="no_tool_calls", iteration=iteration)
         return "decide_node"
 
     # If ONLY tool call is signal_ready_to_decide → go to decide
     non_ready = [tc for tc in tool_calls if tc["name"] != "signal_ready_to_decide"]
     if not non_ready:
+        logger.info("discovery_routing", decision="decide_node", reason="signal_ready_to_decide", iteration=iteration)
         return "decide_node"
 
+    logger.info("discovery_routing", decision="tool_executor", tools=[tc["name"] for tc in non_ready], iteration=iteration)
     return "tool_executor"
 
 
@@ -259,6 +347,13 @@ async def tool_executor_node(state: OrchestratorState, config: RunnableConfig) -
     last_ai = messages[-1]
     tool_calls = getattr(last_ai, "tool_calls", []) or []
 
+    logger.info(
+        "tool_executor_start",
+        turn_id=state["turn_id"],
+        tool_count=len(tool_calls),
+        tools=[{"name": tc["name"], "args": tc["args"]} for tc in tool_calls],
+    )
+
     tool_messages: list[ToolMessage] = []
     new_discovery_results: list[dict] = []
 
@@ -275,6 +370,13 @@ async def tool_executor_node(state: OrchestratorState, config: RunnableConfig) -
                 name=tool_name,
             ))
             continue
+
+        logger.info(
+            "tool_call",
+            turn_id=state["turn_id"],
+            tool=tool_name,
+            args=tool_args,
+        )
 
         seq = await seq_counter.next()
         await ws_send(make_step(
@@ -298,8 +400,20 @@ async def tool_executor_node(state: OrchestratorState, config: RunnableConfig) -
                     # run_discovery_queries returns a list
                     new_discovery_results.extend(result)
                 result_str = json.dumps(result) if not isinstance(result, str) else result
+            logger.info(
+                "tool_result",
+                turn_id=state["turn_id"],
+                tool=tool_name,
+                result_preview=result_str[:300],
+            )
         except Exception as exc:
             result_str = json.dumps({"error": str(exc)})
+            logger.warning(
+                "tool_error",
+                turn_id=state["turn_id"],
+                tool=tool_name,
+                error=str(exc),
+            )
 
         tool_messages.append(ToolMessage(
             content=result_str,
@@ -311,6 +425,12 @@ async def tool_executor_node(state: OrchestratorState, config: RunnableConfig) -
     if new_discovery_results:
         updates["discovery_results"] = state.get("discovery_results", []) + new_discovery_results
 
+    logger.info(
+        "tool_executor_done",
+        turn_id=state["turn_id"],
+        tools_executed=len(tool_messages),
+        new_query_results=len(new_discovery_results),
+    )
     return updates
 
 
@@ -354,8 +474,17 @@ async def decide_node(state: OrchestratorState, config: RunnableConfig) -> dict:
         )),
     ]
 
+    decide_output: dict = {}
+    reasoning_text = ""
     try:
         model, provider = _model(config)
+        logger.info(
+            "decide_node_llm_call",
+            turn_id=state["turn_id"],
+            model=model,
+            discovery_queries=len(state.get("discovery_results", [])),
+            tables_examined=list(state.get("fetched_table_details", {}).keys()),
+        )
         response: AIMessage = await llm_service.ainvoke(
             decide_messages,
             model=model,
@@ -363,17 +492,47 @@ async def decide_node(state: OrchestratorState, config: RunnableConfig) -> dict:
             temperature=0.1,
             provider=provider,
         )
+        reasoning_text = _extract_reasoning(response)
         content = response.content if isinstance(response.content, str) else ""
         # Strip markdown code fences if model wraps in ```json
         content = content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         decide_output = json.loads(content)
+        logger.info(
+            "decide_node_output",
+            turn_id=state["turn_id"],
+            action=decide_output.get("action"),
+            artifact_count=len(decide_output.get("artifacts", [])),
+            artifact_types=[a.get("artifact_type") for a in decide_output.get("artifacts", [])],
+            artifact_tasks=[a.get("task_description", "")[:80] for a in decide_output.get("artifacts", [])],
+            question=decide_output.get("question", ""),
+            reasoning_preview=reasoning_text[:150],
+        )
     except Exception as exc:
-        logger.warning("decide_node_parse_error", error=str(exc))
+        logger.warning("decide_node_parse_error", turn_id=state["turn_id"], error=str(exc))
         # Fall back to direct response with error
         decide_output = {
             "action": "direct_response",
             "markdown": "I had trouble deciding how to answer that. Could you rephrase your question?",
         }
+
+    # Emit done step with the model's actual reasoning
+    seq = await seq_counter.next()
+    action = decide_output.get("action", "direct_response")
+    await ws_send(make_step(
+        chat_id=state["chat_id"],
+        turn_id=state["turn_id"],
+        seq=seq,
+        name=StepName.DECIDING,
+        status="done",
+        title=f"Decision: {action.replace('_', ' ').title()}",
+        detail=(
+            f"Dispatching {len(decide_output.get('artifacts', []))} artifact(s)"
+            if action == "dispatch_artifacts"
+            else decide_output.get("question", "") if action == "ask_user"
+            else "Generating direct response"
+        ),
+        reasoning=reasoning_text,
+    ))
 
     return {"decide_output": decide_output}
 
@@ -405,25 +564,91 @@ def _summarise_discovery(state: OrchestratorState) -> str:
 
 # ---------------------------------------------------------------------------
 # Edge routing from decide_node
+# Conditional edge functions may return a node name (str) OR list[Send].
 # ---------------------------------------------------------------------------
 
-def route_after_decide(state: OrchestratorState) -> Literal[
-    "direct_response_node", "ask_user_node", "dispatch_artifacts_node"
-]:
-    action = (state.get("decide_output") or {}).get("action", "direct_response")
+def route_after_decide(state: OrchestratorState):
+    """
+    Route based on the decide_node output action.
+    - direct_response  → str (direct_response_node)
+    - ask_user         → str (ask_user_node)
+    - dispatch_artifacts → list[Send] — fans out to N parallel run_worker_node calls.
+
+    Returning list[Send] from a conditional edge is the correct LangGraph
+    pattern. Nodes must return dict; conditional edges may return list[Send].
+    """
+    decide_output = state.get("decide_output") or {}
+    action = decide_output.get("action", "direct_response")
+
     if action == "ask_user":
+        logger.info("route_after_decide", action="ask_user")
         return "ask_user_node"
+
     if action == "dispatch_artifacts":
-        return "dispatch_artifacts_node"
+        artifacts = decide_output.get("artifacts", [])[:_MAX_ARTIFACTS]
+
+        logger.info(
+            "dispatch_artifacts",
+            turn_id=state["turn_id"],
+            artifact_count=len(artifacts),
+            artifacts=[
+                {"type": a.get("artifact_type"), "task": a.get("task_description", "")[:80]}
+                for a in artifacts
+            ],
+        )
+
+        sends: list[Send] = []
+        for i, spec in enumerate(artifacts):
+            tables_in_scope = spec.get("tables_in_scope", [])
+            relevant_rule_ids = spec.get("relevant_business_rule_ids", [])
+
+            prefetched = {
+                t: state.get("fetched_table_details", {}).get(
+                    t, state["full_metadata"].get("tables", {}).get(t, {})
+                )
+                for t in tables_in_scope
+            }
+
+            all_rules = state["full_metadata"].get("business_rules", [])
+            relevant_rules = [
+                r for r in all_rules
+                if r.get("_id") in relevant_rule_ids or r.get("id") in relevant_rule_ids
+            ]
+
+            worker_payload = {
+                "turn_id":                   state["turn_id"],
+                "worker_id":                 str(i),
+                "artifact_type":             spec.get("artifact_type", "table"),
+                "chat_id":                   state["chat_id"],
+                "database_id":               state["database_id"],
+                "schema_name":               state["schema_name"],
+                "task_description":          spec.get("task_description", ""),
+                "metric_clarification":      spec.get("metric_clarification", ""),
+                "suggested_chart_type":      spec.get("suggested_chart_type"),
+                "tables_in_scope":           tables_in_scope,
+                "relevant_business_rule_ids": relevant_rule_ids,
+                "prefetched_context":        prefetched,
+                "relevant_business_rules":   relevant_rules,
+                "worker_messages":           [],
+                "worker_iterations":         0,
+                "executed_queries":          [],
+                "finalized":                 None,
+            }
+            sends.append(Send("run_worker_node", worker_payload))
+
+        # Safety: if model returned dispatch but no artifacts, fall back
+        if not sends:
+            logger.warning("dispatch_artifacts_empty", turn_id=state["turn_id"])
+            return "direct_response_node"
+
+        return sends
+
+    logger.info("route_after_decide", action="direct_response")
     return "direct_response_node"
-
-
-# ---------------------------------------------------------------------------
-# Node: direct_response_node
-# ---------------------------------------------------------------------------
 
 async def direct_response_node(state: OrchestratorState, config: RunnableConfig) -> dict:
     ws_send, seq_counter, llm_service, *_ = await _get_ws(config)
+    model, provider = _model(config)  # Fix: was missing, caused NameError
 
     decide_output = state.get("decide_output") or {}
     markdown = decide_output.get("markdown", "I wasn't able to generate a response.")
@@ -507,6 +732,16 @@ def dispatch_artifacts_node(state: OrchestratorState) -> list[Send]:
     decide_output = state.get("decide_output") or {}
     artifacts = decide_output.get("artifacts", [])[:_MAX_ARTIFACTS]
 
+    logger.info(
+        "dispatch_artifacts",
+        turn_id=state["turn_id"],
+        artifact_count=len(artifacts),
+        artifacts=[
+            {"type": a.get("artifact_type"), "task": a.get("task_description", "")[:80]}
+            for a in artifacts
+        ],
+    )
+
     sends: list[Send] = []
     for i, spec in enumerate(artifacts):
         tables_in_scope = spec.get("tables_in_scope", [])
@@ -574,6 +809,18 @@ async def join_artifacts_node(state: OrchestratorState, config: RunnableConfig) 
     fresh = sum(1 for r in results if r.get("status") == "fresh")
     errors = sum(1 for r in results if r.get("status") == "error")
 
+    logger.info(
+        "join_artifacts",
+        turn_id=state["turn_id"],
+        total=len(results),
+        fresh=fresh,
+        errors=errors,
+        results=[
+            {"title": r.get("title"), "type": r.get("type"), "status": r.get("status"), "note": r.get("note", "")[:80]}
+            for r in results
+        ],
+    )
+
     seq = await seq_counter.next()
     await ws_send(make_step(
         chat_id=state["chat_id"],
@@ -632,9 +879,16 @@ async def synthesize_final_node(state: OrchestratorState, config: RunnableConfig
 
     markdown = ""
     follow_ups: list[str] = []
+    reasoning_text = ""
 
     try:
         model, provider = _model(config)
+        logger.info(
+            "synthesize_llm_call",
+            turn_id=state["turn_id"],
+            model=model,
+            artifact_count=len(results),
+        )
         response: AIMessage = await llm_service.ainvoke(
             synth_messages,
             model=model,
@@ -642,13 +896,22 @@ async def synthesize_final_node(state: OrchestratorState, config: RunnableConfig
             temperature=0.3,
             provider=provider,
         )
+        reasoning_text = _extract_reasoning(response)
         content = response.content if isinstance(response.content, str) else ""
         content = content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         parsed = json.loads(content)
         markdown = parsed.get("markdown", "")
         follow_ups = parsed.get("follow_up_questions", [])[:3]
+        logger.info(
+            "synthesize_output",
+            turn_id=state["turn_id"],
+            markdown_len=len(markdown),
+            follow_up_count=len(follow_ups),
+            follow_ups=follow_ups,
+            reasoning_preview=reasoning_text[:150],
+        )
     except Exception as exc:
-        logger.warning("synthesize_parse_error", error=str(exc))
+        logger.warning("synthesize_parse_error", turn_id=state["turn_id"], error=str(exc))
         # Fallback markdown
         fresh_results = [r for r in results if r["status"] == "fresh"]
         lines = ["Here is your analysis:"]
@@ -658,6 +921,19 @@ async def synthesize_final_node(state: OrchestratorState, config: RunnableConfig
         follow_ups = []
 
     artifact_ids = [r["artifact_id"] for r in results if r["status"] == "fresh"]
+
+    # Emit synthesize done step with actual LLM reasoning before the final event
+    seq = await seq_counter.next()
+    await ws_send(make_step(
+        chat_id=state["chat_id"],
+        turn_id=state["turn_id"],
+        seq=seq,
+        name=StepName.SYNTHESIZING,
+        status="done",
+        title="Analysis Ready",
+        detail=f"Generated insights from {len(artifact_ids)} artifact(s)",
+        reasoning=reasoning_text,
+    ))
 
     seq = await seq_counter.next()
     await ws_send(make_final(
@@ -722,9 +998,7 @@ def build_orchestrator_graph(checkpointer: Any = None):
     graph.add_node("decide_node", decide_node)
     graph.add_node("direct_response_node", direct_response_node)
     graph.add_node("ask_user_node", ask_user_node)
-    # dispatch_artifacts_node returns a list of Send objects — LangGraph
-    # automatically fans out when a node returns [Send(...), Send(...)]
-    graph.add_node("dispatch_artifacts_node", dispatch_artifacts_node)
+    # dispatch is handled via Send in route_after_decide (conditional edge) — no node needed
     graph.add_node("run_worker_node", run_worker_node)
     graph.add_node("join_artifacts_node", join_artifacts_node)
     graph.add_node("synthesize_final_node", synthesize_final_node)
@@ -744,9 +1018,10 @@ def build_orchestrator_graph(checkpointer: Any = None):
         "decide_node",
         route_after_decide,
         {
+            # String returns map to node names;
+            # list[Send] returns (for dispatch_artifacts) are handled directly by LangGraph.
             "direct_response_node": "direct_response_node",
             "ask_user_node": "ask_user_node",
-            "dispatch_artifacts_node": "dispatch_artifacts_node",
         },
     )
 
@@ -756,8 +1031,8 @@ def build_orchestrator_graph(checkpointer: Any = None):
     # ask_user_node pauses via interrupt(); on resume → back to discovery_loop
     graph.add_edge("ask_user_node", "discovery_loop")
 
-    # dispatch_artifacts_node returns [Send("run_worker_node", ...)]
-    # LangGraph fans out automatically; all workers → join_artifacts_node
+    # route_after_decide returns list[Send("run_worker_node", ...)] for dispatch_artifacts;
+    # all workers automatically flow to join_artifacts_node via the edge below.
     graph.add_edge("run_worker_node", "join_artifacts_node")
     graph.add_edge("join_artifacts_node", "synthesize_final_node")
     graph.add_edge("synthesize_final_node", END)

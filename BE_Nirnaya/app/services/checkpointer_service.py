@@ -90,16 +90,26 @@ class CheckpointerService:
 
             self._pool = AsyncConnectionPool(
                 conninfo=settings.database_url,
-                min_size=2,
-                max_size=10,
+                min_size=1,
+                max_size=5,
                 open=False,
-                kwargs={"autocommit": True, "prepare_threshold": None},
-                # If DNS / host is unreachable, reconnect_timeout controls
-                # how long each connection attempt is allowed before failing.
+                kwargs={
+                    "autocommit": True,
+                    "prepare_threshold": None,
+                    # TCP keepalive — keeps the connection alive through Supabase's
+                    # idle-timeout and prevents "server closed the connection unexpectedly".
+                    "keepalives": 1,
+                    "keepalives_idle": 30,      # send first probe after 30s idle
+                    "keepalives_interval": 10,  # probe every 10s after that
+                    "keepalives_count": 5,      # drop after 5 failed probes
+                },
                 reconnect_timeout=3.0,
-                # Suppress per-connection-attempt warnings from psycopg_pool;
-                # we will emit our own single warning below.
                 reconnect_failed=self._on_reconnect_failed,
+                # Actively validate connections before handing them out —
+                # recycles any connection the DB server already closed.
+                max_waiting=10,
+                max_lifetime=300,   # retire connections after 5 min (before Supabase kills them)
+                max_idle=60,        # close idle connections after 60s (psycopg-pool 3.1.x compatible)
             )
 
             # open(wait=True, timeout=N) waits at most N seconds for min_size
@@ -110,7 +120,7 @@ class CheckpointerService:
             await self._checkpointer.setup()  # creates checkpoint tables (idempotent)
 
             self._enabled = True
-            logger.info("checkpointer_postgres_ready", min_pool=2, max_pool=10)
+            logger.info("checkpointer_postgres_ready", min_pool=1, max_pool=5)
 
         except Exception as exc:
             err = str(exc).lower()

@@ -32,6 +32,19 @@ logger = get_logger(__name__)
 _UNIQUE_VALUES_FALLBACK_CAP = 50
 
 
+def _to_plain_dict(obj: Any) -> Any:
+    """Recursively convert Pydantic models or containers to plain JSON-serializable Python types."""
+    if hasattr(obj, "model_dump"):
+        return _to_plain_dict(obj.model_dump())
+    if hasattr(obj, "dict") and callable(getattr(obj, "dict")):
+        return _to_plain_dict(obj.dict())
+    if isinstance(obj, dict):
+        return {k: _to_plain_dict(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_plain_dict(v) for v in obj]
+    return obj
+
+
 # ---------------------------------------------------------------------------
 # Pydantic schemas for finalize tools (enforced structured output)
 # ---------------------------------------------------------------------------
@@ -252,7 +265,7 @@ def create_worker_tools(
         card_type: str,
         format: str,
         note: str,
-        key_numbers: dict,
+        key_numbers: Any,
     ) -> dict:
         """
         Finalize this worker's output as a KPI card artifact.
@@ -274,7 +287,7 @@ def create_worker_tools(
             "card_type": card_type,
             "format": format,
             "note": note,
-            "key_numbers": key_numbers,
+            "key_numbers": _to_plain_dict(key_numbers),
         }
 
     # ------------------------------------------------------------------
@@ -287,9 +300,9 @@ def create_worker_tools(
         title: str,
         chart_family: str,
         chart_type: str,
-        encoding: dict,
+        encoding: Any,
         note: str,
-        key_numbers: dict,
+        key_numbers: Any,
     ) -> dict:
         """
         Finalize this worker's output as a chart artifact.
@@ -314,9 +327,9 @@ def create_worker_tools(
             "title": title,
             "chart_family": chart_family,
             "chart_type": chart_type,
-            "encoding": encoding,
+            "encoding": _to_plain_dict(encoding),
             "note": note,
-            "key_numbers": key_numbers,
+            "key_numbers": _to_plain_dict(key_numbers),
         }
 
     # ------------------------------------------------------------------
@@ -327,9 +340,9 @@ def create_worker_tools(
     async def finalize_table(
         query_id: str,
         title: str,
-        columns: list[dict],
+        columns: Any,
         note: str,
-        key_numbers: dict,
+        key_numbers: Any,
     ) -> dict:
         """
         Finalize this worker's output as a data table artifact.
@@ -342,9 +355,9 @@ def create_worker_tools(
             "artifact_type": "table",
             "query_id": query_id,
             "title": title,
-            "columns": columns,
+            "columns": _to_plain_dict(columns),
             "note": note,
-            "key_numbers": key_numbers,
+            "key_numbers": _to_plain_dict(key_numbers),
         }
 
     return [

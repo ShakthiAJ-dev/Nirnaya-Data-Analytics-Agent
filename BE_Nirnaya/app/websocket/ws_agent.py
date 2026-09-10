@@ -25,13 +25,21 @@ Message shapes (client → server)
   Auth frame (first):
     { "type": "auth", "token": "..." }
 
-  New chat turn:
+  New chat turn (first message — no chat_id needed):
     {
       "requestType": "ChatAgent",
       "transactionId": "uuid",
-      "chat_id": "uuid",
-      "database_id": "uuid",
+      "project_id": "uuid",
       "text": "What is total revenue by country?"
+    }
+
+  Subsequent turn in same chat:
+    {
+      "requestType": "ChatAgent",
+      "transactionId": "uuid",
+      "project_id": "uuid",
+      "chat_id": "uuid",
+      "text": "Break that down by product category too"
     }
 
   Clarification answer (after ask_user event):
@@ -150,22 +158,25 @@ async def handle_chat_agent_frame(
     """
     Spawn an async task that runs the full orchestrator graph for this turn.
     """
-    transaction_id: str = msg.get("transactionId", str(uuid.uuid4()))
-    chat_id: str         = msg.get("chat_id", "")
-    database_id: str     = msg.get("database_id", "")
+    transaction_id: str  = msg.get("transactionId", str(uuid.uuid4()))
+    project_id: str      = msg.get("project_id", "")
+    # chat_id is OPTIONAL — if absent the server generates one (new conversation).
+    # The FE receives the generated chat_id in the ack and sends it back on
+    # subsequent turns to continue the same conversation.
+    chat_id: str         = msg.get("chat_id", "") or str(uuid.uuid4())
     user_message: str    = msg.get("text", "").strip()
     turn_id: str         = str(uuid.uuid4())
-    # Model params — FE selects, defaults to capable Haiku if not specified
+    # Model params — FE selects, defaults to Haiku if not specified
     model: str           = msg.get("model", "claude-4.5-haiku")
     provider: str | None = msg.get("provider")  # None → LLMService auto-detects
 
-    if not chat_id or not database_id or not user_message:
+    if not project_id or not user_message:
         await _safe_send(
             ws,
             _make_frame(
                 "error",
                 transaction_id,
-                content="ChatAgent frame requires: chat_id, database_id, text",
+                content="ChatAgent frame requires: project_id, text",
             ),
         )
         return
@@ -177,8 +188,8 @@ async def handle_chat_agent_frame(
         try:
             await handle_chat_agent(
                 session_id=session_id,
+                project_id=project_id,
                 chat_id=chat_id,
-                database_id=database_id,
                 user_message=user_message,
                 turn_id=turn_id,
                 model=model,
@@ -206,14 +217,15 @@ async def handle_chat_agent_frame(
     task = asyncio.create_task(_run_agent())
     ws_manager.register(session_id, transaction_id, task)
 
-    # Acknowledge immediately so FE knows the turn started
+    # Acknowledge immediately so FE knows the turn started.
+    # chat_id is included so FE can store it and reuse it on the next turn.
     await _safe_send(
         ws,
         _make_frame(
             "ack",
             transaction_id,
             content="Turn started",
-            extra={"turn_id": turn_id, "chat_id": chat_id},
+            extra={"turn_id": turn_id, "chat_id": chat_id, "project_id": project_id},
         ),
     )
 
@@ -328,15 +340,17 @@ async def _receive_loop(
             continue  # malformed — ignore
 
         request_type: str = msg.get("requestType", "")
-        transaction_id: str = msg.get("transactionId", "")
+        # transactionId is optional — server generates one if FE omits it.
+        # Used for task registration/cancellation and ack correlation only.
+        transaction_id: str = msg.get("transactionId", "") or str(uuid.uuid4())
 
-        if not request_type or not transaction_id:
+        if not request_type:
             await _safe_send(
                 ws,
                 _make_frame(
                     "error",
-                    transaction_id or "unknown",
-                    content="Missing requestType or transactionId.",
+                    transaction_id,
+                    content="Missing requestType.",
                 ),
             )
             continue

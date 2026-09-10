@@ -52,12 +52,14 @@ _CHATS_DDL = """
 CREATE TABLE IF NOT EXISTS public.chats (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     session_id  TEXT  NOT NULL,
+    project_id  UUID  REFERENCES public.projects(id) ON DELETE CASCADE,
     database_id UUID  REFERENCES public.databases(id) ON DELETE CASCADE,
     title       TEXT,
     created_at  TIMESTAMPTZ DEFAULT NOW(),
     updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_chats_session_id ON public.chats (session_id);
+CREATE INDEX IF NOT EXISTS idx_chats_project_id ON public.chats (project_id);
 """
 
 _CHAT_MESSAGES_DDL = """
@@ -93,6 +95,19 @@ CREATE TABLE IF NOT EXISTS public.artifacts (
 CREATE INDEX IF NOT EXISTS idx_artifacts_session_db ON public.artifacts (session_id, database_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_chat ON public.artifacts (chat_id);
 """
+
+
+def _make_json_safe(obj: Any) -> Any:
+    """Recursively ensure obj consists only of standard JSON-serializable types."""
+    if hasattr(obj, "model_dump"):
+        return _make_json_safe(obj.model_dump())
+    if hasattr(obj, "dict") and callable(getattr(obj, "dict")):
+        return _make_json_safe(obj.dict())
+    if isinstance(obj, dict):
+        return {k: _make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_make_json_safe(v) for v in obj]
+    return obj
 
 
 class ChatService:
@@ -133,16 +148,24 @@ class ChatService:
     # Chats
     # ------------------------------------------------------------------
 
-    async def create_chat(self, database_id: str, title: str | None = None) -> dict[str, Any]:
+    async def create_chat(
+        self,
+        database_id: str,
+        project_id: str | None = None,
+        title: str | None = None,
+        chat_id: str | None = None,  # Accept caller-supplied UUID (e.g. server-generated)
+    ) -> dict[str, Any]:
         """Create a new chat row; returns the full row dict."""
-        row = {
-            "id": str(uuid.uuid4()),
+        row: dict[str, Any] = {
+            "id": chat_id or str(uuid.uuid4()),
             "session_id": self._session_id,
             "database_id": database_id,
             "title": title,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        if project_id:
+            row["project_id"] = project_id
         try:
             resp = await self._supa.admin.table(CHATS_TABLE).insert(row).execute()
             return resp.data[0] if resp.data else row
@@ -274,8 +297,8 @@ class ChatService:
             "type": artifact_type,
             "title": title,
             "sql_query": sql_query,
-            "config": config,
-            "result_data": result_data,      # already capped at <=1000 rows
+            "config": _make_json_safe(config),
+            "result_data": _make_json_safe(result_data),      # already capped at <=1000 rows
             "row_count": row_count,
             "status": status,
             "error_message": error_message,

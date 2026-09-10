@@ -31,6 +31,7 @@ class OrchestratorState(TypedDict):
     chat_id: str
     turn_id: str
     session_id: str
+    project_id: str           # parent project this chat belongs to
     database_id: str
     schema_name: str          # e.g. n_abc123456789_mydb
     user_message: str

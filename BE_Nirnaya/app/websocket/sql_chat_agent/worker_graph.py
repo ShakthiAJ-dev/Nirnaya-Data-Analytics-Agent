@@ -33,7 +33,7 @@ from app.core.logging import get_logger
 from .events import StepName, make_step
 from .prompts import build_worker_system_prompt
 from .sql_executor import get_cached_query_result
-from .tools_worker import create_worker_tools
+from .tools_worker import create_worker_tools, _to_plain_dict
 
 logger = get_logger(__name__)
 
@@ -61,7 +61,7 @@ async def _promote_artifact(
         config = {
             "chart_family": finalized.get("chart_family"),
             "chart_type":   finalized.get("chart_type"),
-            "encoding":     finalized.get("encoding"),
+            "encoding":     _to_plain_dict(finalized.get("encoding")),
         }
     elif artifact_type == "kpi":
         config = {
@@ -69,7 +69,7 @@ async def _promote_artifact(
             "format":    finalized.get("format"),
         }
     elif artifact_type == "table":
-        config = {"columns": finalized.get("columns", [])}
+        config = {"columns": _to_plain_dict(finalized.get("columns", []))}
 
     result_rows: list[dict] = query_result.get("rows", [])
 
@@ -357,7 +357,7 @@ async def run_worker(
             "type": finalized_result.get("artifact_type", artifact_type),
             "title": finalized_result.get("title", "Untitled"),
             "note": finalized_result.get("note", ""),
-            "key_numbers": finalized_result.get("key_numbers", {}),
+            "key_numbers": _to_plain_dict(finalized_result.get("key_numbers", {})),
             "status": "fresh",
             "error_message": None,
         }]

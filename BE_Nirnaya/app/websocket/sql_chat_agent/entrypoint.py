@@ -249,8 +249,8 @@ async def _auto_generate_title(
 async def handle_chat_agent(
     *,
     session_id: str,
+    project_id: str,
     chat_id: str,
-    database_id: str,
     user_message: str,
     turn_id: str,
     model: str,
@@ -266,13 +266,49 @@ async def handle_chat_agent(
     Streams step/ask_user/final events over the WebSocket.
     """
     from app.services.llm_service import LLMService
+    from app.services.project_service import ProjectService
     from app.services.session_service import SessionService
 
     chat_svc = ChatService(session_id, supabase_service)
     seq_counter = SeqCounter()
     ws_send = make_ws_sender(ws_send_raw, redis_service, turn_id)
 
-    # ── 1. Persist user message ───────────────────────────────────────
+    # ── 1. Resolve project → database_id ──────────────────────────────
+    # The FE sends project_id only. We fetch the project row to get database_id.
+    try:
+        project_svc = ProjectService(session_id, supabase_service)
+        project_record = await project_svc.get(project_id)
+        database_id: str = project_record.get("database_id", "")
+    except Exception as exc:
+        await ws_send(make_error(
+            chat_id=chat_id, turn_id=turn_id,
+            seq=await seq_counter.next(),
+            message=f"Project '{project_id}' not found or not accessible.",
+        ))
+        logger.warning("project_lookup_failed", project_id=project_id, error=str(exc))
+        return
+
+    if not database_id:
+        await ws_send(make_error(
+            chat_id=chat_id, turn_id=turn_id,
+            seq=await seq_counter.next(),
+            message="Project has no database attached. Please upload data files first.",
+        ))
+        return
+
+    # ── 2. Ensure chat row exists (create if new conversation) ────────
+    existing_chat = await chat_svc.get_chat(chat_id)
+    if not existing_chat:
+        try:
+            await chat_svc.create_chat(
+                database_id=database_id,
+                project_id=project_id,
+                chat_id=chat_id,
+            )
+        except Exception as exc:
+            logger.warning("chat_row_create_failed", chat_id=chat_id, error=str(exc))
+
+    # ── 3. Persist user message ───────────────────────────────────────
     try:
         await chat_svc.add_message(
             chat_id=chat_id,
@@ -282,7 +318,7 @@ async def handle_chat_agent(
     except Exception as exc:
         logger.warning("user_message_persist_failed", error=str(exc))
 
-    # ── 2. Load database record ───────────────────────────────────────
+    # ── 4. Load database record ───────────────────────────────────────
     db_record = await _get_database_record(database_id, session_id, supabase_service)
     if not db_record:
         await ws_send(make_error(
@@ -293,7 +329,7 @@ async def handle_chat_agent(
         return
     schema_name: str = db_record["schema_name"]
 
-    # ── 3. Load metadata ─────────────────────────────────────────────────
+    # ── 5. Load metadata ──────────────────────────────────────────────
     full_metadata = await _load_metadata_from_storage(session_id, database_id, supabase_service)
 
     if not full_metadata.get("tables"):
@@ -323,10 +359,10 @@ async def handle_chat_agent(
     # ── 6. Load recent turns ─────────────────────────────────────────────────
     recent_turns = await _load_recent_turns(chat_id, session_id, supabase_service)
 
-    # ── 7. Auto-title (silent, non-blocking) ──────────────────────────────────
-    # Only fires if this is the first message in the chat (no prior turns)
-    chat_record = await chat_svc.get_chat(chat_id)
-    if chat_record and not chat_record.get("title") and not recent_turns:
+    # ── 7. Auto-title (silent, non-blocking) ─────────────────────────────
+    # Fire when this is a brand-new chat (existing_chat was None) so title is
+    # always set on the first message and never re-set on followup turns.
+    if not existing_chat and not recent_turns:
         session_svc_title = SessionService(redis_service)
         llm_service_title = LLMService.from_session(session_id, session_svc_title)
         asyncio.create_task(_auto_generate_title(
@@ -349,23 +385,24 @@ async def handle_chat_agent(
         "chat_id":              chat_id,
         "turn_id":              turn_id,
         "session_id":           session_id,
-        "database_id":         database_id,
-        "schema_name":         schema_name,
-        "user_message":        user_message,
-        "recent_turns":        recent_turns,
-        "tables_overview":     tables_overview,
-        "business_rules_index":business_rules_index,
-        "full_metadata":       full_metadata,
-        "discovery_messages":  [],
-        "discovery_iterations":0,
+        "project_id":           project_id,
+        "database_id":          database_id,
+        "schema_name":          schema_name,
+        "user_message":         user_message,
+        "recent_turns":         recent_turns,
+        "tables_overview":      tables_overview,
+        "business_rules_index": business_rules_index,
+        "full_metadata":        full_metadata,
+        "discovery_messages":   [],
+        "discovery_iterations": 0,
         "fetched_table_details":{},
-        "discovery_results":   [],
-        "decide_output":       None,
-        "pending_question":    None,
-        "dispatch_plan":       None,
-        "artifact_results":    [],
-        "final_markdown":      None,
-        "follow_up_questions": None,
+        "discovery_results":    [],
+        "decide_output":        None,
+        "pending_question":     None,
+        "dispatch_plan":        None,
+        "artifact_results":     [],
+        "final_markdown":       None,
+        "follow_up_questions":  None,
     }
 
     # ── 10. Build LangGraph config ────────────────────────────────────────────────

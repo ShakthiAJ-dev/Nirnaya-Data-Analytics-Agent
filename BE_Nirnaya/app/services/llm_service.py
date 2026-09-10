@@ -238,6 +238,20 @@ class LLMService:
 
             response: AIMessage = await llm.ainvoke(messages)  # type: ignore[assignment]
 
+            # ── DEBUG: log full raw response structure ────────────────────────
+            # Temporary — remove once reasoning field locations are confirmed.
+            logger.info(
+                "llm_raw_response_debug",
+                provider=actual_provider,
+                model=model,
+                content_type=type(response.content).__name__,
+                content=response.content,
+                response_metadata=getattr(response, "response_metadata", {}),
+                additional_kwargs=getattr(response, "additional_kwargs", {}),
+                usage_metadata=getattr(response, "usage_metadata", {}),
+            )
+            # ─────────────────────────────────────────────────────────────────
+
             # Flatten content when tools are not used so caller gets a consistent string
             if not tools:
                 response.content = _normalize_content(response.content)
