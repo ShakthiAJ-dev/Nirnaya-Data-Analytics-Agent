@@ -1,6 +1,5 @@
 import { api } from './apiClient';
 import type { Database } from '../types';
-import type { PreviewResponse } from './demoService';
 
 export interface CreateDatabasePayload {
   name: string;
@@ -19,6 +18,24 @@ export interface UploadProcessResponse {
   message: string;
 }
 
+export interface PreviewResponse {
+  rows: Record<string, any>[];
+  columns: string[];
+  total_count: number;
+  has_more: boolean;
+  offset: number;
+  limit: number;
+}
+
+export interface DemoCreateResponse {
+  project_id: string;
+  database_id: string;
+  title: string;
+  database_name: string;
+  schema_name: string;
+  metadata_path?: string;
+}
+
 export const databaseService = {
   getDatabases: async (): Promise<Database[]> => {
     const res = await api.get<{ success: boolean; data: { databases: Database[]; total: number } }>('/databases');
@@ -33,6 +50,11 @@ export const databaseService = {
   createDatabase: async (payload: CreateDatabasePayload): Promise<Database> => {
     const res = await api.post<{ success: boolean; data: Database }>('/databases', payload);
     return res.data;
+  },
+
+  /** Create the pre-loaded Music E-commerce demo database for the current session. Idempotent. */
+  createDemoDatabase: async (): Promise<DemoCreateResponse> => {
+    return api.post<DemoCreateResponse>('/demo/create', {});
   },
 
   deleteDatabase: async (databaseId: string): Promise<void> => {
@@ -62,25 +84,19 @@ export const databaseService = {
     return res.data;
   },
 
-  // Helper method that orchestrates the 2-step presigned flow
   uploadFile: async (databaseId: string, file: File): Promise<UploadProcessResponse> => {
-    // 1. Get presigned URL
     const { upload_url, file_path } = await databaseService.presignUpload(databaseId, file.name);
 
-    // 2. Upload file directly to Supabase Storage
     const uploadRes = await fetch(upload_url, {
       method: 'PUT',
       body: file,
-      headers: {
-        'Content-Type': file.type || 'application/octet-stream',
-      },
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
     });
 
     if (!uploadRes.ok) {
       throw new Error(`Failed to upload file to storage: ${uploadRes.statusText}`);
     }
 
-    // 3. Tell BE to process the uploaded file
     return databaseService.processUpload(databaseId, file_path, file.name);
   },
 };

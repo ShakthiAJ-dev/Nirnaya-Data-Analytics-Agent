@@ -37,6 +37,8 @@ from app.api.routes.databases import router as databases_router
 from app.api.routes.demo import router as demo_router
 from app.websocket.ws_agent import router as ws_agent_router
 from app.services.database_service import DatabaseService
+from app.services.chat_service import ChatService
+from app.services.checkpointer_service import CheckpointerService
 from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
@@ -73,12 +75,21 @@ async def lifespan(app: FastAPI):
     # Create app tables (projects, databases, file_uploads) if absent
     await DatabaseService.initialize_app_tables(supabase_service)
 
-    logger.info("nirnaya_services_ready", services=["supabase", "redis", "ws_manager"])
+    # Create chat agent tables (chats, chat_messages, artifacts) if absent
+    await ChatService.initialize_chat_tables(supabase_service)
+
+    # LangGraph Postgres checkpointer (enables interrupt/resume for ask_user flow)
+    checkpointer_service = CheckpointerService()
+    await checkpointer_service.initialize()
+    app.state.checkpointer_service = checkpointer_service
+
+    logger.info("nirnaya_services_ready", services=["supabase", "redis", "ws_manager", "checkpointer"])
 
     yield  # ← application handles requests here
 
-    # ── SHUTDOWN ─────────────────────────────────────────────────────────
+    # ── SHUTDOWN ──────────────────────────────────────────────────────────────────
     logger.info("nirnaya_shutdown_started")
+    await checkpointer_service.close()
     await redis_service.close()
     await supabase_service.close()
     logger.info("nirnaya_shutdown_complete")

@@ -6,8 +6,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { databaseService } from '../services/databaseService';
-import { demoService } from '../services/demoService';
-import type { PreviewResponse } from '../services/demoService';
+import type { PreviewResponse } from '../services/databaseService';
 
 interface TableMeta {
   overview?: string;
@@ -29,7 +28,6 @@ interface DatabaseTablesModalProps {
   onClose: () => void;
   databaseId: string;
   databaseName: string;
-  isDemo: boolean;
   metadata: any; // full metadata JSON: { tables: { [name]: TableMeta } }
 }
 
@@ -53,7 +51,6 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
   onClose,
   databaseId,
   databaseName,
-  isDemo,
   metadata,
 }) => {
   const [view, setView] = useState<View>('list');
@@ -92,9 +89,7 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
     setPreviewLoading(true);
     setPreviewError(null);
     try {
-      const data = isDemo
-        ? await demoService.previewDemoTable(tableName, 20, offset)
-        : await databaseService.previewTable(databaseId, tableName, 20, offset);
+      const data = await databaseService.previewTable(databaseId, tableName, 20, offset);
       if (offset === 0) {
         setPreviewData(data);
       } else {
@@ -108,7 +103,7 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
     } finally {
       setPreviewLoading(false);
     }
-  }, [databaseId, isDemo]);
+  }, [databaseId]);
 
   const handleOpenPreview = () => {
     if (!selectedTable) return;
@@ -371,15 +366,10 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
       <div style={s.card}>
         {/* Header */}
         <div style={s.header}>
-          <Database size={16} style={{ color: isDemo ? '#818cf8' : 'var(--accent-cyan)', flexShrink: 0 }} />
+          <Database size={16} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
           <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
             {titleMap[view]}
           </span>
-          {isDemo && (
-            <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '10px', background: 'rgba(99,102,241,0.2)', color: '#a5b4fc', fontWeight: 600 }}>
-              Demo
-            </span>
-          )}
           <button style={s.closeBtn} onClick={handleClose} title="Close">
             <X size={16} />
           </button>

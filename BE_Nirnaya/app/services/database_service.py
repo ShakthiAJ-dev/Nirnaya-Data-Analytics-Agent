@@ -27,7 +27,6 @@ from app.core.config import settings
 from app.core.exceptions import (
     DatabaseException,
     NotFoundException,
-    PermissionException,
     ValidationException,
 )
 from app.core.logging import get_logger
@@ -346,7 +345,6 @@ class DatabaseService:
             "session_id": self._session_id,
             "name": name,
             "schema_name": schema_name,
-            "is_demo": False,
             "created_at": now,
         }
         try:
@@ -434,16 +432,11 @@ class DatabaseService:
 
     async def delete_database(self, database_id: str) -> None:
         """
-        - Reject demo databases.
         - DROP SCHEMA CASCADE.
         - Remove storage files and metadata.
         - Delete file_uploads and databases table entries.
         """
         db = await self.get_database(database_id)
-
-        if db.get("is_demo"):
-            raise PermissionException("Cannot delete the demo database.")
-
         schema_name = db["schema_name"]
 
         await self._exec_sql(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE;")
@@ -490,6 +483,97 @@ class DatabaseService:
             raise DatabaseException(f"Delete database record failed: {exc}") from exc
 
         logger.info("database_deleted", database_id=database_id, session_id=self._session_id)
+
+    # ------------------------------------------------------------------
+    # Demo database
+    # ------------------------------------------------------------------
+
+    async def create_demo_database(self) -> dict[str, Any]:
+        """
+        Create a Music E-commerce database pre-loaded with demo parquet files.
+        Idempotent: returns the existing record if the demo was already created.
+
+        Steps:
+        1. Create database + schema (skip if already exists)
+        2. Ingest all parquet files from app/demo database files/
+        3. Upload pre-built metadata JSON (no LLM call)
+        """
+        import pathlib
+
+        DEMO_NAME = "Music E-commerce"
+        DEMO_DIR = pathlib.Path(__file__).parent.parent / "demo database files"
+        DEMO_META_FILE = DEMO_DIR / "demo_database.json"
+
+        # Idempotent: return existing if already created
+        schema_name = make_schema_name(self._session_id, DEMO_NAME)
+        existing = await self._get_by_schema(schema_name)
+        if existing:
+            return existing
+
+        db = await self.create_database(DEMO_NAME)
+        database_id = db["id"]
+        schema_name = db["schema_name"]
+
+        pd = _import_pandas()
+        now = datetime.now(timezone.utc).isoformat()
+
+        for parquet_path in sorted(DEMO_DIR.glob("*.parquet")):
+            table_name = parquet_path.stem
+            df = pd.read_parquet(parquet_path)
+            df.columns = [_sanitize(str(c), max_len=60) for c in df.columns]
+            result = await self._ingest_dataframe(schema_name, table_name, df)
+            try:
+                await self._supa.admin.table(FILE_UPLOADS_TABLE).insert({
+                    "session_id":        self._session_id,
+                    "database_id":       database_id,
+                    "filename":          parquet_path.name,
+                    "original_filename": parquet_path.name,
+                    "table_name":        table_name,
+                    "row_count":         result["row_count"],
+                    "status":            "ready",
+                    "created_at":        now,
+                }).execute()
+            except Exception as exc:
+                logger.warning("demo_file_upload_record_failed", table=table_name, error=str(exc))
+
+        # Normalize demo_database.json to standard metadata format
+        try:
+            raw_meta = json.loads(DEMO_META_FILE.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("demo_metadata_read_failed", error=str(exc))
+            raw_meta = {}
+
+        # Use raw table data as-is — all stats are pre-computed and correct
+        metadata: dict[str, Any] = {
+            "database_name":  DEMO_NAME,
+            "schema_name":    schema_name,
+            "generated_at":   datetime.now(timezone.utc).isoformat(),
+            "generated_by":   "nirnaya-demo",
+            "business_rules": raw_meta.get("business_rules", []),
+            "tables":         raw_meta.get("tables", {}),
+        }
+
+        meta_path = f"{self._session_id}/metadata/{database_id}.json"
+        try:
+            await self._supa.upload_file(
+                BUCKET,
+                meta_path,
+                json.dumps(metadata, indent=2, default=str).encode("utf-8"),
+                content_type="application/json",
+                upsert=True,
+            )
+            await (
+                self._supa.admin.table(DATABASES_TABLE)
+                .update({"metadata_path": meta_path})
+                .eq("id", database_id)
+                .execute()
+            )
+            db["metadata_path"] = meta_path
+        except Exception as exc:
+            logger.warning("demo_metadata_upload_failed", error=str(exc))
+
+        logger.info("demo_database_created", database_id=database_id, session_id=self._session_id)
+        return db
 
     # ------------------------------------------------------------------
     # File upload
@@ -1150,7 +1234,6 @@ class DatabaseService:
                 session_id    TEXT NOT NULL,
                 name          TEXT NOT NULL,
                 schema_name   TEXT NOT NULL,
-                is_demo       BOOLEAN NOT NULL DEFAULT FALSE,
                 metadata_path TEXT,
                 created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );

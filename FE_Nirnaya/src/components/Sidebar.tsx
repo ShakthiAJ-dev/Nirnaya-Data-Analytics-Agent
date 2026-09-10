@@ -7,8 +7,8 @@ import {
   Database,
   Upload,
   Layers,
-  Lock,
   Eye,
+  Sparkles,
 } from 'lucide-react';
 import { NirnayaLogo } from './Logo';
 import { DatabaseTablesModal } from './DatabaseTablesModal';
@@ -20,6 +20,7 @@ interface SidebarProps {
   databases: DatabaseType[];
   credentials: LLMCredentials;
   pendingDatabaseId?: string;
+  isDataLoaded?: boolean;
   onSelectProject: (projectId: string) => void;
   onSelectDatabase?: (dbId: string) => void;
   onNewChat: () => void;
@@ -28,12 +29,12 @@ interface SidebarProps {
   onDeleteDatabase: (databaseId: string, e: React.MouseEvent) => void;
   onUploadToDatabase: (databaseId: string) => void;
   onOpenCredentials: () => void;
+  onAddDemo: () => void;
 }
 
 interface ModalState {
   databaseId: string;
   databaseName: string;
-  isDemo: boolean;
   metadata: any;
 }
 
@@ -43,6 +44,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   databases,
   credentials,
   pendingDatabaseId,
+  isDataLoaded = false,
   onSelectProject,
   onSelectDatabase,
   onNewChat,
@@ -51,6 +53,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDeleteDatabase,
   onUploadToDatabase,
   onOpenCredentials,
+  onAddDemo,
 }) => {
   const [dbHovered, setDbHovered] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState | null>(null);
@@ -59,19 +62,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
     credentials.anthropicApiKey || credentials.openaiApiKey || credentials.geminiApiKey
   );
 
-  // Demo project (for building the demo database card)
-  const demoProject = projects.find((p) => p.is_demo || p.isDemo || p.id === 'demo-project');
-  const demoRawMeta = demoProject?.raw_metadata ?? null;
-  const demoTableCount = demoRawMeta?.tables
-    ? Object.keys(demoRawMeta.tables).length
-    : (demoProject?.datasets?.length ?? 0);
-
-  // User projects only (non-demo, real chat history)
   const today = new Date().toISOString().split('T')[0];
-  const userProjects = projects.filter((p) => !p.is_demo && !p.isDemo && p.id !== 'demo-project');
-  const todayProjects = userProjects.filter((p) => p.created_at?.startsWith(today));
-  const earlierProjects = userProjects.filter((p) => !p.created_at?.startsWith(today));
-  const hasUserProjects = userProjects.length > 0;
+  const todayProjects = projects.filter((p) => p.created_at?.startsWith(today));
+  const earlierProjects = projects.filter((p) => !p.created_at?.startsWith(today));
+  const hasProjects = projects.length > 0;
 
   const getDatabaseForProject = (project: Project) => {
     if (!project.database_id) return null;
@@ -99,33 +93,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '0 8px' }}>
-        {/* Demo database card */}
-        {demoProject && (
-          <DbCard
-            name="Music E-commerce (Demo)"
-            tableCount={demoTableCount}
-            isDemo={true}
-            isActive={pendingDatabaseId === 'demo-database'}
-            hovered={dbHovered === 'demo-database'}
-            onMouseEnter={() => setDbHovered('demo-database')}
-            onMouseLeave={() => setDbHovered(null)}
-            onSelect={() => onSelectDatabase?.('demo-database')}
-            onViewTables={(e) => openModal(e, {
-              databaseId: 'demo-database',
-              databaseName: 'Music E-commerce (Demo)',
-              isDemo: true,
-              metadata: demoRawMeta,
-            })}
-          />
-        )}
-
         {/* User databases */}
-        {databases.filter((d) => !d.is_demo).map((db) => (
+        {databases.map((db) => (
           <DbCard
             key={db.id}
             name={db.name}
             tableCount={tableCountForDb(db)}
-            isDemo={false}
             isActive={pendingDatabaseId === db.id}
             hovered={dbHovered === db.id}
             onMouseEnter={() => setDbHovered(db.id)}
@@ -134,13 +107,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onViewTables={(e) => openModal(e, {
               databaseId: db.id,
               databaseName: db.name,
-              isDemo: false,
               metadata: db.metadata,
             })}
             onUpload={() => onUploadToDatabase(db.id)}
             onDelete={(e) => onDeleteDatabase(db.id, e)}
           />
         ))}
+
+        {/* Add Demo Database — shown after data loads when no databases exist */}
+        {isDataLoaded && databases.length === 0 && (
+          <button
+            type="button"
+            onClick={onAddDemo}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '7px',
+              padding: '8px 10px', borderRadius: '8px', cursor: 'pointer',
+              background: 'rgba(99,102,241,0.08)', border: '1px dashed rgba(99,102,241,0.35)',
+              color: '#a5b4fc', fontSize: '12.5px', width: '100%', textAlign: 'left',
+            }}
+          >
+            <Sparkles size={13} style={{ flexShrink: 0 }} />
+            <span>Load Demo Database</span>
+          </button>
+        )}
 
         {/* + New Database */}
         <button
@@ -159,8 +148,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <span>Projects</span>
       </div>
 
-      {/* New Chat — only visible once user has created at least one project */}
-      {hasUserProjects && (
+      {hasProjects && (
         <div className="sidebar-action-wrap">
           <button type="button" className="btn-new-chat" onClick={onNewChat} id="btn-new-chat">
             <Plus size={16} strokeWidth={2.5} />
@@ -214,7 +202,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         )}
 
-        {!hasUserProjects && (
+        {!hasProjects && (
           <div style={{
             padding: '16px 12px', textAlign: 'center', color: 'var(--text-muted)',
             fontSize: '12.5px', display: 'flex', flexDirection: 'column',
@@ -227,8 +215,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      {/* Footer — LLM Credentials */}
-      <div className="sidebar-footer">
+      {/* Footer — LLM Credentials (shown after session data loads) */}
+      {isDataLoaded && <div className="sidebar-footer">
         <button
           type="button"
           className="credentials-card-btn"
@@ -255,7 +243,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
           </div>
         </button>
-      </div>
+      </div>}
 
       {/* Database Tables Modal */}
       {modal && (
@@ -264,7 +252,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClose={() => setModal(null)}
           databaseId={modal.databaseId}
           databaseName={modal.databaseName}
-          isDemo={modal.isDemo}
           metadata={modal.metadata}
         />
       )}
@@ -277,7 +264,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
 interface DbCardProps {
   name: string;
   tableCount: number;
-  isDemo: boolean;
   isActive?: boolean;
   hovered: boolean;
   onMouseEnter: () => void;
@@ -289,7 +275,7 @@ interface DbCardProps {
 }
 
 const DbCard: React.FC<DbCardProps> = ({
-  name, tableCount, isDemo, isActive, hovered,
+  name, tableCount, isActive, hovered,
   onMouseEnter, onMouseLeave, onViewTables, onSelect, onUpload, onDelete,
 }) => (
   <div
@@ -298,15 +284,11 @@ const DbCard: React.FC<DbCardProps> = ({
     onMouseLeave={onMouseLeave}
     style={isActive ? { background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.3)' } : undefined}
   >
-    {/* Left: icon + name + table count (clickable area if onSelect provided) */}
     <div
       style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0, cursor: onSelect ? 'pointer' : 'default' }}
       onClick={onSelect}
     >
-      {isDemo
-        ? <Lock size={13} style={{ color: '#818cf8', flexShrink: 0 }} />
-        : <Database size={13} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
-      }
+      <Database size={13} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
       <span style={{
         fontSize: '12.5px', color: isActive ? '#c7d2fe' : 'var(--text-secondary)',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
@@ -315,34 +297,27 @@ const DbCard: React.FC<DbCardProps> = ({
       </span>
       <span style={{
         fontSize: '10px', padding: '1px 6px', borderRadius: '8px', flexShrink: 0,
-        background: isDemo ? 'rgba(99,102,241,0.15)' : 'rgba(6,182,212,0.12)',
-        color: isDemo ? '#a5b4fc' : 'var(--accent-cyan)',
+        background: 'rgba(6,182,212,0.12)', color: 'var(--accent-cyan)',
         fontWeight: 600, whiteSpace: 'nowrap',
       }}>
         {tableCount} {tableCount === 1 ? 'table' : 'tables'}
       </span>
     </div>
 
-    {/* Right: action buttons (shown on hover) */}
     <div style={{ display: 'flex', gap: '3px', flexShrink: 0, visibility: hovered ? 'visible' : 'hidden' }}>
-      {/* View tables button — always */}
       <button
         type="button"
         title="View tables"
         onClick={onViewTables}
         style={{
           padding: '3px 5px', borderRadius: '5px', cursor: 'pointer',
-          background: isDemo ? 'rgba(99,102,241,0.12)' : 'rgba(6,182,212,0.1)',
-          border: 'none',
-          color: isDemo ? '#a5b4fc' : 'var(--accent-cyan)',
-          display: 'flex', alignItems: 'center',
+          background: 'rgba(6,182,212,0.1)', border: 'none',
+          color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center',
         }}
       >
         <Eye size={11} />
       </button>
-
-      {/* Upload + Delete — user databases only */}
-      {!isDemo && onUpload && (
+      {onUpload && (
         <button
           type="button"
           title="Upload file to this database"
@@ -356,7 +331,7 @@ const DbCard: React.FC<DbCardProps> = ({
           <Upload size={11} />
         </button>
       )}
-      {!isDemo && onDelete && (
+      {onDelete && (
         <button
           type="button"
           title="Delete database"

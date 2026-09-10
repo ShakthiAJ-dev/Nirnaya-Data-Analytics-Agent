@@ -1,169 +1,76 @@
 """
 app/api/routes/demo.py
 -----------------------
-Demo project routes — no user credentials required.
+Demo project creation — creates a fully populated Music E-commerce database
+and linked project for the calling session on demand.
 
-Endpoints:
-  GET  /api/v1/demo/project  — fetch demo project metadata from Supabase storage
-  POST /api/v1/demo/chat     — chat against the demo dataset using server-side Bedrock
+POST /api/v1/demo/create — auth required, idempotent
 """
 
-import json
-from typing import Any
+from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
-from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel
+from fastapi import APIRouter, Request, status
+from fastapi.responses import JSONResponse
 
-from app.services.data_service import DataService
-from app.services.llm_service import LLMService
+from app.core.dependencies import RedisDep, get_session_service
+from app.core.exceptions import SessionException
+from app.core.logging import get_logger
+from app.services.database_service import DatabaseService
+from app.services.project_service import ProjectService
+from app.services.session_service import verify_token
 
+logger = get_logger(__name__)
 router = APIRouter(prefix="/demo", tags=["Demo"])
 
-# The demo files live under demo/ in the nirnaya-sessions bucket.
-# FileService prepends session_id, so session_id="demo" resolves
-# demo/metadata/demo_database.json correctly.
-_DEMO_SESSION_ID = "demo"
-_DEMO_METADATA_PATH = "metadata/demo_database.json"
+
+async def _require_session(request: Request, redis: RedisDep):
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise SessionException("Missing or malformed Authorization header.")
+    token = auth.removeprefix("Bearer ").strip()
+    session_id = verify_token(token)
+    if session_id is None:
+        raise SessionException("Invalid or expired session token.")
+    svc = get_session_service(redis)
+    if not await svc.get_session(session_id):
+        raise SessionException("Session not found or expired.")
+    await svc.refresh_session(session_id)
+    return session_id
 
 
-async def _fetch_demo_metadata(request: Request) -> dict[str, Any]:
-    """
-    Download and parse the demo metadata JSON from Supabase Storage
-    using the existing FileService (session_id='demo' → bucket path demo/metadata/...).
-    """
-    supabase = request.app.state.supabase_service
-    ds = DataService(session_id=_DEMO_SESSION_ID, supabase=supabase)
-    raw_bytes: bytes = await ds.file.download(_DEMO_METADATA_PATH)
-    return json.loads(raw_bytes)
+def _supabase(request: Request):
+    return request.app.state.supabase_service
 
 
-@router.get("/project")
-async def get_demo_project_metadata(request: Request) -> dict[str, Any]:
-    """
-    Fetches the demo project metadata from Supabase Storage and structures
-    it for the frontend.
-    """
-    try:
-        raw_metadata = await _fetch_demo_metadata(request)
+@router.post(
+    "/create",
+    status_code=status.HTTP_201_CREATED,
+    summary="Create demo project",
+    description=(
+        "Creates a Music E-commerce database with pre-loaded data and a linked project "
+        "for the calling session. Idempotent — returns existing demo if already created."
+    ),
+)
+async def create_demo_project(request: Request, redis: RedisDep) -> JSONResponse:
+    session_id = await _require_session(request, redis)
+    supabase = _supabase(request)
 
-        # Build structured datasets list from the tables map
-        datasets: list[dict[str, Any]] = []
-        for table_name, table_data in raw_metadata.get("tables", {}).items():
-            datasets.append({
-                "name": f"{table_name}.sql",
-                "tableName": table_name,
-                "rows": table_data.get("row_count", 0),
-                "columns": [col["name"] for col in table_data.get("columns", [])],
-                "description": table_data.get("overview", ""),
-                "useCase": table_data.get("use_case", ""),
-                "keyNotes": table_data.get("key_notes", ""),
-                "domainTags": table_data.get("domain_tags", []),
-            })
+    db_service = DatabaseService(session_id, supabase)
+    db = await db_service.create_demo_database()
 
+    project_service = ProjectService(session_id, supabase)
+    project = await project_service.create(database_id=db["id"])
 
-        return {
-            "id": "demo-project",
-            "name": "Music E-commerce (Demo)",
-            "description": "Pre-loaded Music E-commerce dataset — ask questions about sales, tracks, customers and more.",
-            "is_demo": True,
-            "datasets": datasets,
-            "raw_metadata": raw_metadata,
-        }
+    logger.info("demo_project_created", session_id=session_id, database_id=db["id"], project_id=project["id"])
 
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to load demo metadata: {exc}",
-        )
-
-
-class DemoChatRequest(BaseModel):
-    message: str
-
-
-@router.post("/chat")
-async def demo_chat(request: Request, body: DemoChatRequest) -> dict[str, Any]:
-    """
-    Handles chat for the demo project using the server's Bedrock config.
-    Fetches demo schema context and sends it alongside the user message.
-    """
-    try:
-        raw_metadata = await _fetch_demo_metadata(request)
-
-        # Build schema context from tables
-        schema_lines: list[str] = []
-        for table_name, table_data in raw_metadata.get("tables", {}).items():
-            cols = ", ".join(col["name"] for col in table_data.get("columns", []))
-            row_count = table_data.get("row_count", 0)
-            overview = table_data.get("overview", "")
-            schema_lines.append(
-                f"Table `{table_name}` ({row_count} rows)\n"
-                f"  Columns: {cols}\n"
-                f"  Description: {overview}"
-            )
-
-        schema_context = "\n\n".join(schema_lines)
-
-        system_prompt = (
-            "You are Nirnaya, an expert AI Data Analytics Assistant. "
-            "You are operating in Demo Mode on a Music E-commerce PostgreSQL dataset. "
-            "When asked about data or analysis, answer based on the schema below. "
-            "If the user asks for SQL, generate accurate queries against these tables. "
-            "Be concise, insightful, and professional.\n\n"
-            "## Database Schema\n\n"
-            f"{schema_context}"
-        )
-
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=body.message),
-        ]
-
-        llm = LLMService(session_id="demo_session")
-        response = await llm.ainvoke(
-            messages=messages,
-            model="claude-3-5-sonnet",
-            provider="anthropic",
-            request_type="demo_chat",
-        )
-
-        return {"reply": response.content}
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Demo chat failed: {exc}")
-
-
-@router.get("/tables/{table_name}/preview")
-async def demo_preview_table(
-    table_name: str,
-    request: Request,
-    limit: int = 20,
-    offset: int = 0,
-) -> dict[str, Any]:
-    """Preview rows from a demo table. No auth required."""
-    try:
-        raw_metadata = await _fetch_demo_metadata(request)
-        schema_name = (
-            raw_metadata.get("schema_name")
-            or raw_metadata.get("schema")
-            or "demo"
-        )
-        table_meta = raw_metadata.get("tables", {}).get(table_name)
-        if table_meta is None:
-            raise HTTPException(status_code=404, detail=f"Table '{table_name}' not found in demo.")
-        supabase = request.app.state.supabase_service
-        from app.services.database_service import DatabaseService
-        ds = DatabaseService(session_id="demo", supabase=supabase)
-        data = await ds._preview_by_schema(
-            schema_name, table_name,
-            limit=min(max(limit, 1), 100),
-            offset=max(offset, 0),
-        )
-        return {"success": True, "data": data}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Demo preview failed: {exc}")
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "project_id": project["id"],
+            "database_id": db["id"],
+            "title": project.get("title", "Untitled"),
+            "database_name": db["name"],
+            "schema_name": db["schema_name"],
+            "metadata_path": db.get("metadata_path"),
+        },
+    )

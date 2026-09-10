@@ -22,8 +22,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
 
   if (!isOpen) return null;
 
-  const demoDb = databases.find((d) => d.is_demo);
-  const selectedDb = databases.find((d) => d.id === selectedDbId) || demoDb || databases[0];
+  const selectedDb = databases.find((d) => d.id === selectedDbId) || databases[0];
 
   const handleCreate = async () => {
     await onCreateProject(selectedDb?.id);
@@ -92,11 +91,6 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                 <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <Database size={14} style={{ color: 'var(--accent-cyan)' }} />
                   {selectedDb ? selectedDb.name : 'Select a database'}
-                  {selectedDb?.is_demo && (
-                    <span style={{ fontSize: '10px', padding: '1px 6px', background: 'rgba(99,102,241,0.2)', borderRadius: '4px', color: '#818cf8' }}>
-                      Demo
-                    </span>
-                  )}
                 </span>
                 <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />
               </button>
@@ -122,11 +116,6 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                     >
                       <Database size={13} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
                       <span>{db.name}</span>
-                      {db.is_demo && (
-                        <span style={{ marginLeft: 'auto', fontSize: '10px', padding: '1px 6px', background: 'rgba(99,102,241,0.2)', borderRadius: '4px', color: '#818cf8' }}>
-                          Demo
-                        </span>
-                      )}
                     </button>
                   ))}
                 </div>

@@ -12,11 +12,9 @@ import {
   Database,
   KeyRound,
   ChevronDown,
-  Lock,
 } from 'lucide-react';
 import { LogoEmblem } from './Logo';
 import type { Message, Project, Database as DatabaseType } from '../types';
-import { AVAILABLE_MODELS } from '../constants/models';
 import type { BackendModel } from '../services/sessionService';
 
 interface ChatAreaProps {
@@ -24,8 +22,9 @@ interface ChatAreaProps {
   messages: Message[];
   selectedModelId: string;
   isLoading: boolean;
+  isDataLoaded?: boolean;
   pendingDatabaseName?: string;
-  availableDatabasesForPicker?: Pick<DatabaseType, 'id' | 'name' | 'is_demo'>[];
+  availableDatabasesForPicker?: Pick<DatabaseType, 'id' | 'name'>[];
   onSelectDatabase?: (dbId: string) => void;
   onSendSuggestedPrompt: (prompt: string) => void;
   availableModels?: BackendModel[];
@@ -35,8 +34,8 @@ interface ChatAreaProps {
 export const ChatArea: React.FC<ChatAreaProps> = ({
   currentProject,
   messages,
-  selectedModelId,
   isLoading,
+  isDataLoaded = false,
   pendingDatabaseName,
   availableDatabasesForPicker = [],
   onSelectDatabase,
@@ -49,15 +48,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [dbPickerOpen, setDbPickerOpen] = useState(false);
 
   // No project: header shows pending DB name (selectable)
-  const hasProject = Boolean(currentProject?.id && currentProject.id !== 'demo-project' && !currentProject.is_demo && !currentProject.isDemo && (currentProject.messages?.length ?? 0) > 0);
+  const hasProject = Boolean(currentProject?.id && (currentProject.messages?.length ?? 0) > 0);
   const headerDbName = currentProject?.title && currentProject.title !== 'Untitled'
     ? currentProject.title
     : pendingDatabaseName ?? 'Select a Database';
 
-  const selectedModel =
-    availableModels.find((m) => m.id === selectedModelId) ||
-    AVAILABLE_MODELS.find((m) => m.id === selectedModelId) ||
-    (availableModels.length > 0 ? availableModels[0] : null);
 
   // Auto scroll to bottom
   useEffect(() => {
@@ -107,17 +102,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               onClick={() => setDbPickerOpen((v) => !v)}
               title="Change active database"
             >
-              {availableDatabasesForPicker.find((d) => d.name === headerDbName)?.is_demo
-                ? <Lock size={14} style={{ color: '#818cf8' }} />
-                : <Database size={16} style={{ color: 'var(--accent-cyan)' }} />
-              }
+              <Database size={16} style={{ color: 'var(--accent-cyan)' }} />
               <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{headerDbName}</span>
               <ChevronDown size={13} style={{ color: 'var(--text-muted)', marginLeft: '2px' }} />
             </button>
           ) : (
             <div className="chat-header-project">
               <Database size={16} style={{ color: 'var(--accent-cyan)' }} />
-              <span>{currentProject?.title || currentProject?.name || headerDbName}</span>
+              <span>{currentProject?.title || headerDbName}</span>
             </div>
           )}
           <span className="header-slash">/</span>
@@ -144,47 +136,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     border: 'none',
                   }}
                 >
-                  {db.is_demo
-                    ? <Lock size={13} style={{ color: '#818cf8', flexShrink: 0 }} />
-                    : <Database size={13} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
-                  }
+                  <Database size={13} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
                   <span>{db.name}</span>
-                  {db.is_demo && (
-                    <span style={{ marginLeft: 'auto', fontSize: '10px', padding: '1px 6px', background: 'rgba(99,102,241,0.2)', borderRadius: '4px', color: '#818cf8' }}>
-                      Demo
-                    </span>
-                  )}
                 </button>
               ))}
             </div>
-          )}
-        </div>
-
-        <div className="chat-header-actions">
-          {selectedModel ? (
-            <div className="model-pill-badge" title={`Active model: ${selectedModel.name}`}>
-              <span className="model-pill-dot"></span>
-              <span>{selectedModel.name}</span>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="model-pill-badge"
-              style={{
-                background: 'rgba(245, 158, 11, 0.08)',
-                borderColor: 'rgba(245, 158, 11, 0.3)',
-                color: '#fbbf24',
-                cursor: onOpenCredentials ? 'pointer' : 'default',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-              }}
-              onClick={onOpenCredentials}
-              title="Click to add API key"
-            >
-              <KeyRound size={11} />
-              <span>API Key Required</span>
-            </button>
           )}
         </div>
       </header>
@@ -202,11 +158,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <p className="empty-subtext">
               Welcome to <span className="kannada-accent-pill">Nirnaya</span>. Ask complex
               business questions, inspect uploaded data files, or simulate strategic decisions
-              across <strong style={{ color: '#ffffff' }}>{currentProject?.name || 'your datasets'}</strong>.
+              across <strong style={{ color: '#ffffff' }}>{currentProject?.title || 'your datasets'}</strong>.
             </p>
 
-            {/* Prompt to add API keys if none configured */}
-            {availableModels.length === 0 && (
+            {/* Prompt to add API keys if none configured — only after data is loaded */}
+            {isDataLoaded && availableModels.length === 0 && (
               <div
                 style={{
                   display: 'flex',
@@ -450,26 +406,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             );
           })
         )}
-
-        {/* Loading / Typing Indicator */}
-        {isLoading && (
-          <div className="message-row message-row-assistant">
-            <div className="message-bubble-assistant-wrap">
-              <div className="assistant-avatar">
-                <LogoEmblem size={22} />
-              </div>
-              <div className="assistant-bubble typing-indicator-box">
-                <span className="typing-dot"></span>
-                <span className="typing-dot"></span>
-                <span className="typing-dot"></span>
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: '8px' }}>
-                  Nirnaya is synthesizing decision data...
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
-
         <div ref={scrollEndRef} />
       </div>
     </div>

@@ -42,7 +42,6 @@ export interface Database {
   id: string;
   name: string;
   schema_name: string;
-  is_demo: boolean;
   metadata_path?: string;
   created_at: string;
   metadata?: any;
@@ -66,16 +65,8 @@ export interface Project {
   session_id: string;
   created_at: string;
   updated_at: string;
-  // Local state for the chat interface
   messages: Message[];
   model?: string;
-  is_demo?: boolean;
-  isDemo?: boolean;
-  datasets?: DatasetMetadata[];
-  raw_metadata?: any;
-  name?: string;
-  description?: string;
-  datasetsCount?: number;
 }
 
 export interface LLMCredentials {

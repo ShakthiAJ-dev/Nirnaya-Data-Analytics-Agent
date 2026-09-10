@@ -149,7 +149,6 @@ class DatabaseRecord(TableModel):
     """
     Schema for the ``databases`` table.
     Each record represents a Postgres schema created for a session.
-    The demo database is seeded at boot with is_demo=True.
 
     Note: uses UUID PK; managed by DatabaseService directly.
     """
@@ -158,7 +157,6 @@ class DatabaseRecord(TableModel):
 
     name: str = Field(description="Human-readable database name.")
     schema_name: str = Field(description="Actual Postgres schema name.")
-    is_demo: bool = Field(default=False, description="True for the read-only demo database.")
     metadata_path: Optional[str] = Field(
         default=None,
         description="Storage path: {session_id}/metadata/{database_id}.json",

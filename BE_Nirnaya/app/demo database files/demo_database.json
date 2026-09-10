@@ -25,8 +25,7 @@
       "key_notes": "All quantities are 1, suggesting each invoice line contains exactly one unit of a track. Unit prices are limited to two distinct values (0.99 and 1.99), indicating a simplified or standardized pricing model. Foreign key relationships exist with invoice_id and track_id tables.",
       "pii_columns": [],
       "row_count": 2240,
-      "
-      ": 5,
+      "column_count": 5,
       "columns": [
         {
           "name": "invoice_line_id",
