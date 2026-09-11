@@ -20,18 +20,17 @@ from typing import Any
 
 def _format_tables_for_prompt(full_metadata: dict, schema_name: str) -> str:
     """
-    Render ALL tables from the metadata blob into a compact but complete
-    text block for injection into LLM system prompts.
+    Render ALL tables from the metadata blob as a compact overview for the
+    LLM system prompt.  Column-level details (types, stats, unique values)
+    are intentionally omitted here to keep the prompt small.
+    The LLM can call get_table_details() to get full column info for any table.
 
     Format per table:
       ## schema.table_name
       Overview: ...
       Grain: ...
       Key columns: col1, col2
-      Business domain: tag1, tag2
-      Notes: ...
-      Columns:
-        - col_name (type): [min=X, max=Y] [unique values: A, B, C]
+      Domain: tag1, tag2
     """
     tables = full_metadata.get("tables", {})
     if not tables:
@@ -41,56 +40,14 @@ def _format_tables_for_prompt(full_metadata: dict, schema_name: str) -> str:
     for tname, tinfo in tables.items():
         lines.append(f"\n## {schema_name}.{tname}")
         lines.append(f"Overview: {tinfo.get('overview', '')}")
-        lines.append(f"Grain: {tinfo.get('grain', '')}")
-        lines.append(f"Use case: {tinfo.get('use_case', '')}")
+        if tinfo.get("grain"):
+            lines.append(f"Grain: {tinfo.get('grain', '')}")
         kc = ", ".join(tinfo.get("key_columns", []))
         if kc:
             lines.append(f"Key columns: {kc}")
         tags = ", ".join(tinfo.get("domain_tags", []))
         if tags:
             lines.append(f"Domain: {tags}")
-        notes = tinfo.get("key_notes", "")
-        if notes:
-            lines.append(f"Notes: {notes}")
-        currency = tinfo.get("currency")
-        if currency:
-            lines.append(f"Currency: {currency}")
-        tz = tinfo.get("timezone")
-        if tz:
-            lines.append(f"Timezone: {tz}")
-        lines.append(f"Row count: {tinfo.get('row_count', '?')}")
-
-        # Columns
-        lines.append("Columns:")
-        for col in tinfo.get("columns", []):
-            col_name = col["name"]
-            col_type = col.get("data_type", "")
-            col_class = col.get("type_class", "")
-            nullable = "nullable" if col.get("nullable") else "not null"
-            parts = [f"  - {col_name} ({col_type} / {col_class}, {nullable})"]
-
-            # Numeric stats
-            if col_class == "numeric":
-                mn = col.get("min")
-                mx = col.get("max")
-                av = col.get("avg")
-                if mn is not None:
-                    parts.append(f"min={mn}, max={mx}, avg={round(av, 2) if av else av}")
-
-            # Categorical unique values (pre-computed, no DB round trip needed)
-            uv = col.get("unique_values")
-            if uv:
-                shown = uv[:30]
-                suffix = "…" if len(uv) > 30 else ""
-                parts.append(f"values: [{', '.join(str(v) for v in shown)}{suffix}]")
-            elif col.get("unique_values_count"):
-                parts.append(f"~{col['unique_values_count']} distinct values")
-
-            null_c = col.get("null_count", 0)
-            if null_c:
-                parts.append(f"nulls: {null_c}")
-
-            lines.append("  ".join(parts))
 
     return "\n".join(lines)
 
@@ -133,9 +90,13 @@ You operate in three phases:
 2. DECIDE — Choose one of: (a) answer directly with text, (b) ask the user a clarifying question, or (c) dispatch artifact workers to produce charts/KPIs/tables.
 3. SYNTHESIZE — After workers produce artifacts, write a concise analytical narrative.
 
-━━━ DATABASE SCHEMA ━━━
+━━━ DATABASE SCHEMA (overview only) ━━━
 Schema name: {schema_name}
 All SQL must use fully-qualified table names: {schema_name}.table_name
+
+The table list below shows only overview, grain, key columns, and domain tags.
+Call get_table_details(table_names=[...]) to get full column names, types, and statistics for any table before writing SQL or deciding what to build.
+
 {tables_context}
 
 ━━━ BUSINESS RULES ━━━
@@ -146,14 +107,28 @@ Use fetch_business_rule(rule_ids=[...]) to retrieve the full content of any rule
 {recent_turns}
 
 ━━━ GROUND RULES ━━━
+- ALWAYS call get_table_details before referencing column names — the overview above does not list columns.
 - NEVER use `SET search_path` — always use {schema_name}.table_name in all SQL.
 - NEVER reference any schema other than {schema_name} in generated SQL.
-- Do not hallucinate column names. Use only columns listed above.
+- Do not hallucinate column names. Use only columns confirmed via get_table_details.
 - For ambiguous questions, ask ONE focused clarifying question before dispatching.
 - If you run discovery queries, interpret the results carefully before deciding.
 - When dispatching multiple artifacts, ensure they all use the SAME metric definitions via metric_clarification.
 - Maximum 6 artifacts per response.
+
+━━━ REASONING REQUIREMENT (MANDATORY) ━━━
+Before EVERY tool call you MUST output a structured preamble in EXACTLY this format — no exceptions:
+
+TITLE: <a short statement describing what you are about to do, e.g. "Checking the invoice table structure">
+REASON: <1-3 sentences explaining what you are about to do and why — be specific: mention table names, column names, or data questions>
+
+Example:
+TITLE: Checking invoice table to find date columns
+REASON: I need to see what date and amount columns exist in the invoice table before I can filter by time period. The schema overview doesn't list individual columns so get_table_details is required first.
+
+Never jump straight to a tool call. Always write the TITLE/REASON block first.
 """
+
 
 
 def build_orchestrator_system_prompt(
@@ -204,6 +179,14 @@ All SQL must use: {schema_name}.table_name
 - Reference the query_id from run_sql — do NOT restate the full SQL in finalize.
 - You MUST call a finalize tool to complete your task. Do not just explain.
 {chart_hint}
+
+━━━ REASONING REQUIREMENT (MANDATORY) ━━━
+Before EVERY tool call (run_sql AND finalize) output a structured preamble in EXACTLY this format:
+
+TITLE: <a short statement describing what you are about to do, e.g. "Running revenue aggregation query">
+REASON: <1-3 sentences explaining what query you are writing and why — be specific about columns, filters, and aggregations>
+
+Never jump straight to a tool call. Always write the TITLE/REASON block first.
 """
 
 
@@ -273,12 +256,22 @@ def build_worker_system_prompt(
 DECIDE_SYSTEM = """You are a routing agent. Given the user's question and the discovery findings,
 choose exactly ONE action:
 
-  direct_response  — The question can be answered in plain text (no data needed, or already answered by discovery).
-  ask_user         — The question is ambiguous and you need ONE specific clarification before proceeding.
+  direct_response    — The question can be answered in plain text (no data needed, or already answered by discovery).
+  ask_user           — The question is ambiguous and you need ONE specific clarification before proceeding.
   dispatch_artifacts — Dispatch workers to produce kpi/chart/table artifacts.
 
-Return ONLY valid JSON matching the schema provided. Do not add explanation outside the JSON.
+You MUST also include:
+  "step_title"  — A short, friendly 4-8 word title describing what you're about to do (e.g. "Answering Your Revenue Question", "Clarifying Which Time Period", "Building Three Sales Charts"). Title case, no punctuation.
+  "reasoning"   — A complete explanation of WHY you chose this action and what you understood from the discovery. Be specific: mention table names, columns, data ranges, or findings that led to your decision. No length limit.
+
+Return ONLY valid JSON. Do not add explanation outside the JSON.
 """
+
+DECIDE_SCHEMA = {
+    "direct_response":    '{"action": "direct_response", "markdown": "...", "step_title": "...", "reasoning": "..."}',
+    "ask_user":           '{"action": "ask_user", "question": "...", "mode": "mcq"|"free_text", "options": [...] or null, "step_title": "...", "reasoning": "..."}',
+    "dispatch_artifacts": '{"action": "dispatch_artifacts", "step_title": "...", "reasoning": "...", "artifacts": [{"artifact_type": "kpi"|"chart"|"table", "task_description": "...", "tables_in_scope": [...], "suggested_chart_type": null|"line"|..., "metric_clarification": "shared definitions all artifacts must follow", "relevant_business_rule_ids": [...]}]}',
+}
 
 
 # ---------------------------------------------------------------------------
@@ -294,5 +287,10 @@ Given the artifact results below, write a concise markdown summary (2-4 paragrap
 
 Also generate exactly 2-3 follow-up questions that would naturally extend this analysis.
 
-Return ONLY valid JSON: {"markdown": "...", "follow_up_questions": ["...", "...", "..."]}
+You MUST also include:
+  "step_title" — A short, friendly 4-8 word title for this analysis (e.g. "Sales Performance Across All Regions"). Title case, no punctuation.
+  "reasoning"  — A complete explanation of how you synthesized the artifacts: what the key numbers showed, what patterns you noticed, and how you formed the narrative. Be specific. No length limit.
+
+Return ONLY valid JSON:
+{"markdown": "...", "follow_up_questions": ["...", "...", "..."], "step_title": "...", "reasoning": "..."}
 """

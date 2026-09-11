@@ -127,7 +127,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 <button
                   key={db.id}
                   type="button"
-                  onClick={() => { onSelectDatabase(db.id); setDbPickerOpen(false); }}
+                  onClick={() => { onSelectDatabase?.(db.id); setDbPickerOpen(false); }}
                   style={{
                     width: '100%', padding: '8px 10px', borderRadius: '6px', textAlign: 'left',
                     background: db.name === headerDbName ? 'rgba(99,102,241,0.15)' : 'transparent',

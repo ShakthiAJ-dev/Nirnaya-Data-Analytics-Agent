@@ -48,6 +48,12 @@ _ANTHROPIC_DIRECT_MODEL_MAP: dict[str, str] = {
     "claude-3-7-sonnet": "claude-3-7-sonnet-20250219",
 }
 
+# Cheapest models to use for lightweight utility calls (e.g. title generation)
+# These are deliberately NOT the agent model — we want speed + low cost.
+_TITLE_MODEL_BEDROCK = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+_TITLE_MODEL_ANTHROPIC_DIRECT = "claude-3-5-haiku-20241022"
+_TITLE_MODEL_OPENAI = "gpt-4o-mini"
+
 
 def _detect_provider(model: str) -> str:
     """Auto-detect provider from model identifier string."""
@@ -269,3 +275,86 @@ class LLMService:
             if "rate" in err_str.lower() or "throttl" in err_str.lower() or "429" in err_str:
                 raise LLMRateLimitException(f"LLM Rate limit error: {exc}") from exc
             raise LLMException(f"LLM invocation error: {exc}") from exc
+
+    async def generate_title(
+        self,
+        user_message: str,
+        provider: str | None = None,
+    ) -> str:
+        """
+        Generate a short project title (3-6 words) from the user's first message.
+
+        Deliberately uses the cheapest available model regardless of what model
+        the caller/agent is using — this is a lightweight utility call:
+          • Bedrock  → claude-haiku-4-5
+          • Anthropic direct → claude-3-5-haiku
+          • OpenAI   → gpt-4o-mini
+
+        Returns an empty string on any failure (title is optional / non-fatal).
+        """
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        system_prompt = (
+            "Generate a concise project title of 3 to 6 words in title case. "
+            "No punctuation, no explanation, no quotes. "
+            "Output ONLY the title and nothing else."
+        )
+
+        actual_provider = provider or _detect_provider("")  # default openai, but overridden below
+
+        # Resolve provider from session if not supplied
+        if not provider:
+            # Try to infer from available keys
+            if settings.claude_provider in ("bedrock", "anthropic"):
+                actual_provider = "anthropic"
+            else:
+                actual_provider = "openai"
+
+        # Pick the cheapest model for this provider
+        if actual_provider == "anthropic":
+            if settings.claude_provider == "bedrock":
+                title_model_id = _TITLE_MODEL_BEDROCK
+                boto3_client = self._get_bedrock_boto3_client()
+                llm: BaseChatModel = ChatBedrockConverse(
+                    model=title_model_id,
+                    client=boto3_client,
+                    max_tokens=20,
+                    temperature=0.0,
+                )
+            else:
+                api_key = self._direct_api_key
+                if not api_key and self.session_service and self.session_id:
+                    _, api_key = await self.session_service.get_api_key(self.session_id, "anthropic")
+                if not api_key:
+                    return ""
+                llm = ChatAnthropic(
+                    model=_TITLE_MODEL_ANTHROPIC_DIRECT,
+                    api_key=api_key,
+                    max_tokens=20,
+                    temperature=0.0,
+                )
+        else:
+            api_key = self._direct_api_key
+            if not api_key and self.session_service and self.session_id:
+                _, api_key = await self.session_service.get_api_key(self.session_id, "openai")
+            if not api_key:
+                return ""
+            llm = ChatOpenAI(
+                model=_TITLE_MODEL_OPENAI,
+                api_key=api_key,
+                max_tokens=20,
+                temperature=0.0,
+            )
+
+        try:
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_message[:300]),
+            ]
+            response = await llm.ainvoke(messages)  # type: ignore[assignment]
+            title = _normalize_content(response.content).strip().strip('"\'')
+            logger.info("generate_title_success", provider=actual_provider, title=title)
+            return title
+        except Exception as exc:
+            logger.warning("generate_title_failed", provider=actual_provider, error=str(exc))
+            return ""

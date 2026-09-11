@@ -29,11 +29,45 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 
+import re
+
 from app.core.logging import get_logger
 from .events import StepName, make_step
 from .prompts import build_worker_system_prompt
 from .sql_executor import get_cached_query_result
 from .tools_worker import create_worker_tools, _to_plain_dict
+
+
+_W_TITLE_RE = re.compile(r"TITLE:\s*(.+?)(?:\n|$)", re.IGNORECASE)
+_W_REASON_RE = re.compile(r"REASON:\s*([\s\S]+?)(?=TITLE:|$)", re.IGNORECASE)
+
+
+def _worker_parse_preamble(text: str) -> tuple[str, str]:
+    """Parse TITLE/REASON block from worker LLM preamble. Falls back gracefully."""
+    if not text:
+        return "", ""
+    title_m = _W_TITLE_RE.search(text)
+    reason_m = _W_REASON_RE.search(text)
+    if title_m:
+        title = title_m.group(1).strip()
+        reasoning = reason_m.group(1).strip() if reason_m else text.strip()
+        return title, reasoning
+    lines = text.strip().splitlines()
+    return (lines[0].strip()[:100] if lines else ""), text.strip()
+
+
+def _worker_preamble_text(response) -> str:
+    """Extract plain text before tool calls from an AIMessage."""
+    tool_calls = getattr(response, "tool_calls", []) or []
+    if not tool_calls:
+        return ""
+    content = response.content
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+        return " ".join(parts).strip()
+    return ""
 
 logger = get_logger(__name__)
 
@@ -52,8 +86,14 @@ async def _promote_artifact(
     effective_db_id: str | None,
     supabase_service: Any,
     chat_service: Any,
-) -> str:
-    """Write the finalized artifact to Postgres artifacts table. Returns artifact_id."""
+    project_id: str,
+    turn_message_id: str | None,
+) -> dict:
+    """
+    Write the finalized artifact to Postgres artifacts table.
+    Returns the full artifact row (not just the ID) so the worker can
+    pack config/result_data/sql_query into ArtifactResult for the WS final event.
+    """
     artifact_type = finalized.get("artifact_type", "table")
 
     config: dict[str, Any] = {}
@@ -72,20 +112,21 @@ async def _promote_artifact(
         config = {"columns": _to_plain_dict(finalized.get("columns", []))}
 
     result_rows: list[dict] = query_result.get("rows", [])
+    sql_query: str = query_result.get("sql", "")
 
     artifact_row = await chat_service.create_artifact(
         database_id=effective_db_id,
-        chat_id=worker_state["chat_id"],
-        message_id=None,
+        project_id=project_id,
+        message_id=turn_message_id,
         artifact_type=artifact_type,
         title=finalized.get("title", "Untitled"),
-        sql_query=query_result.get("sql", ""),
+        sql_query=sql_query,
         config=config,
         result_data=result_rows,
         row_count=query_result.get("row_count", len(result_rows)),
         status="fresh",
     )
-    return artifact_row["id"]
+    return artifact_row  # full row dict
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +153,8 @@ async def run_worker(
     seq_counter = cfg["seq_counter"]
     # None for demo database (no FK row), UUID string for real databases
     effective_db_id: str | None = cfg.get("effective_db_id", worker_state.get("database_id"))
+    project_id: str = cfg.get("project_id", "")
+    turn_message_id: str | None = cfg.get("turn_message_id")
 
     turn_id = worker_state["turn_id"]
     worker_id = worker_state["worker_id"]
@@ -120,20 +163,7 @@ async def run_worker(
     model: str = cfg.get("model", "claude-4.5-haiku")
     provider: str | None = cfg.get("provider")
 
-    # ── Emit: worker starting ──────────────────────────────────────────
-    seq = await seq_counter.next()
-    await ws_send(make_step(
-        chat_id=chat_id,
-        turn_id=turn_id,
-        seq=seq,
-        name=StepName.ARTIFACT_PROGRESS,
-        status="in_progress",
-        title=f"Building {artifact_type.upper()} — Worker {worker_id}",
-        detail=worker_state["task_description"],
-        reasoning=f"Metric scope: {worker_state['metric_clarification'][:200]}",
-        worker_id=worker_id,
-    ))
-
+    # ── Emit: worker starting ────────────────────────────────────────────
     # ── Build tools for this worker instance ─────────────────────────
     schema_name = worker_state["schema_name"]
     full_metadata = cfg["full_metadata"]
@@ -175,9 +205,27 @@ async def run_worker(
 
     finalized_result: dict | None = None
     executed_queries: list[dict] = []
+    last_llm_preamble_reasoning: str = ""
 
     # ── Explore loop ─────────────────────────────────────────────────
     for iteration in range(_MAX_WORKER_ITERATIONS):
+        logger.info(
+            "worker_llm_call",
+            worker_id=worker_id,
+            turn_id=turn_id,
+            iteration=iteration,
+            model=model,
+            message_count=len(messages),
+            chat_messages=[
+                {
+                    "role": type(m).__name__,
+                    "content_preview": (
+                        m.content if isinstance(m.content, str) else str(m.content)
+                    )[:400],
+                }
+                for m in messages
+            ],
+        )
         try:
             response: AIMessage = await llm_service.ainvoke(
                 messages,
@@ -192,6 +240,11 @@ async def run_worker(
             return _error_result(worker_state, f"LLM call failed: {exc}")
 
         messages.append(response)
+
+        # Extract REASON from structured preamble — used in done step reasoning
+        raw_preamble = _worker_preamble_text(response)
+        if raw_preamble:
+            _, last_llm_preamble_reasoning = _worker_parse_preamble(raw_preamble)
 
         # Check if model wants to call tools
         tool_calls = getattr(response, "tool_calls", []) or []
@@ -262,19 +315,6 @@ async def run_worker(
                     name=tool_name,
                 ))
 
-                # Emit progress for each SQL run
-                seq = await seq_counter.next()
-                await ws_send(make_step(
-                    chat_id=chat_id,
-                    turn_id=turn_id,
-                    seq=seq,
-                    name=StepName.ARTIFACT_PROGRESS,
-                    status="in_progress",
-                    title=f"Executing SQL — Worker {worker_id}",
-                    detail=tool_args.get("label", "Running query…"),
-                    reasoning=f"Query returned {sql_result.get('row_count', '?')} rows",
-                    worker_id=worker_id,
-                ))
 
             else:
                 # Other tools (get_table_details, get_column_unique_values, fetch_business_rule)
@@ -317,19 +357,23 @@ async def run_worker(
 
     # Promote to Postgres
     try:
-        artifact_id = await _promote_artifact(
+        artifact_row = await _promote_artifact(
             finalized=finalized_result,
             worker_state=worker_state,
             query_result=query_result,
             effective_db_id=effective_db_id,
             supabase_service=supabase_service,
             chat_service=chat_service,
+            project_id=project_id,
+            turn_message_id=turn_message_id,
         )
     except Exception as exc:
         logger.error("worker_promote_failed", worker_id=worker_id, error=str(exc))
         return _error_result(worker_state, f"Failed to save artifact: {exc}")
 
-    # ── Emit: worker done ─────────────────────────────────────────────
+    artifact_id: str = artifact_row["id"]
+
+    # ── Emit: worker done ────────────────────────────────────────────────
     seq = await seq_counter.next()
     await ws_send(make_step(
         chat_id=chat_id,
@@ -337,9 +381,9 @@ async def run_worker(
         seq=seq,
         name=StepName.ARTIFACT_PROGRESS,
         status="done",
-        title=f"{artifact_type.upper()} Ready — {finalized_result.get('title', '')}",
+        title=finalized_result.get("title", "Done"),
         detail=finalized_result.get("note", ""),
-        reasoning="",
+        reasoning=last_llm_preamble_reasoning,
         artifact_id=artifact_id,
         worker_id=worker_id,
     ))
@@ -353,13 +397,17 @@ async def run_worker(
 
     return {
         "artifact_results": [{
-            "artifact_id": artifact_id,
-            "type": finalized_result.get("artifact_type", artifact_type),
-            "title": finalized_result.get("title", "Untitled"),
-            "note": finalized_result.get("note", ""),
-            "key_numbers": _to_plain_dict(finalized_result.get("key_numbers", {})),
-            "status": "fresh",
+            "artifact_id":   artifact_id,
+            "type":          finalized_result.get("artifact_type", artifact_type),
+            "title":         finalized_result.get("title", "Untitled"),
+            "note":          finalized_result.get("note", ""),
+            "key_numbers":   _to_plain_dict(finalized_result.get("key_numbers", {})),
+            "status":        "fresh",
             "error_message": None,
+            # Full payload for the WS final event
+            "config":        artifact_row.get("config", {}),
+            "result_data":   artifact_row.get("result_data", []),
+            "sql_query":     artifact_row.get("sql_query", ""),
         }]
     }
 
@@ -368,12 +416,15 @@ def _error_result(worker_state: dict, error_message: str) -> dict:
     """Return a failed artifact result."""
     return {
         "artifact_results": [{
-            "artifact_id": str(uuid.uuid4()),
-            "type": worker_state.get("artifact_type", "table"),
-            "title": f"Failed: {worker_state.get('task_description', '')[:60]}",
-            "note": error_message,
-            "key_numbers": {},
-            "status": "error",
+            "artifact_id":   str(uuid.uuid4()),
+            "type":          worker_state.get("artifact_type", "table"),
+            "title":         f"Failed: {worker_state.get('task_description', '')[:60]}",
+            "note":          error_message,
+            "key_numbers":   {},
+            "status":        "error",
             "error_message": error_message,
+            "config":        {},
+            "result_data":   [],
+            "sql_query":     "",
         }]
     }

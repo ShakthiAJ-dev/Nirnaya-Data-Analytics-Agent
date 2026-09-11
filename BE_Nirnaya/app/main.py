@@ -35,6 +35,7 @@ from app.api.routes.session import router as session_router
 from app.api.routes.projects import router as projects_router
 from app.api.routes.databases import router as databases_router
 from app.api.routes.demo import router as demo_router
+from app.api.routes.artifacts import router as artifacts_router
 from app.websocket.ws_agent import router as ws_agent_router
 from app.services.database_service import DatabaseService
 from app.services.chat_service import ChatService
@@ -157,6 +158,7 @@ app.include_router(session_router, prefix=settings.api_v1_prefix)
 app.include_router(projects_router, prefix=settings.api_v1_prefix)
 app.include_router(databases_router, prefix=settings.api_v1_prefix)
 app.include_router(demo_router, prefix=settings.api_v1_prefix)
+app.include_router(artifacts_router, prefix=settings.api_v1_prefix)
 app.include_router(ws_agent_router)  # /ws/agent — no api/v1 prefix
 
 

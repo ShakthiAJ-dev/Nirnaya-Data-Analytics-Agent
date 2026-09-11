@@ -111,16 +111,23 @@ def make_final(
     turn_id: str,
     seq: int,
     markdown: str,
-    artifact_ids: list[str],
+    artifacts: list[dict],       # full artifact details — not just IDs
     follow_up_questions: list[str],
 ) -> dict[str, Any]:
+    """
+    Terminal WS event sent when the graph completes.
+    `artifacts` contains the complete payload for each artifact so FE does not
+    need to make a separate REST call.
+    Each artifact dict: {artifact_id, type, title, note, key_numbers, config,
+                         result_data, sql_query, status, error_message}
+    """
     return {
         "type": "final",
         "chat_id": chat_id,
         "turn_id": turn_id,
         "seq": seq,
         "markdown": markdown,
-        "artifact_ids": artifact_ids,
+        "artifacts": artifacts,
         "follow_up_questions": follow_up_questions,
         "ts": _now(),
     }

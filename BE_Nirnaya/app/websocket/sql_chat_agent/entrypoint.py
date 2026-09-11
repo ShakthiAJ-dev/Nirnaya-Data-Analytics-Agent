@@ -34,7 +34,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine
 
-from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
@@ -42,7 +41,7 @@ from app.core.logging import get_logger
 from app.services.chat_service import ChatService
 from app.services.redis_service import RedisService
 from app.services.supabase_service import SupabaseService
-
+from app.services.project_service import ProjectService
 from .events import STREAM_TTL_SECONDS, make_error, make_step, stream_key, StepName
 from .orchestrator_graph import build_orchestrator_graph
 
@@ -160,25 +159,27 @@ async def _get_database_record(
 # ---------------------------------------------------------------------------
 
 async def _load_recent_turns(
-    chat_id: str,
+    project_id: str,
     session_id: str,
     supabase_service: SupabaseService,
 ) -> list[dict]:
-    """Load and compact the last 10 messages for prompt context."""
+    """
+    Load and compact the last 5 *completed* turns for this project.
+    Queries chat_messages by project_id (oldest-first after limit reversal).
+    Each DB row = one turn with user_message + output fields.
+    """
     chat_svc = ChatService(session_id, supabase_service)
-    messages = await chat_svc.get_recent_messages(chat_id, limit=10)
+    rows = await chat_svc.get_recent_turns(project_id, limit=5)
 
     turns: list[dict] = []
-    for msg in messages:
-        role = msg.get("role", "")
-        content = msg.get("content", {})
-        if role == "user":
-            turns.append({"role": "user", "text": content.get("text", "")})
-        elif role == "assistant":
+    for row in rows:
+        turns.append({"role": "user", "text": row.get("user_message", "")})
+        output = row.get("output") or {}
+        if output:
             turns.append({
                 "role": "assistant",
-                "markdown": content.get("markdown", "")[:400],
-                "artifact_titles": content.get("artifact_ids", []),
+                "content": {"markdown": output.get("markdown", "")[:400]},
+                "artifact_titles": output.get("artifact_ids", []),
             })
     return turns
 
@@ -187,59 +188,51 @@ async def _load_recent_turns(
 # Auto title generator — silent, fire-and-forget
 # ---------------------------------------------------------------------------
 
-async def _auto_generate_title(
+async def _auto_generate_project_title(
     *,
-    chat_id: str,
+    project_id: str,
     user_message: str,
-    session_id: str,
     llm_service: Any,
-    model: str,
     provider: str | None,
     ws_send: Callable[[dict], Coroutine],
-    supabase_service: SupabaseService,
+    project_service: ProjectService,
 ) -> None:
     """
-    Generate a short chat title from the first user message and persist it.
-    Sends a 'chat_title_updated' WS event (not a step — doesn't appear in
-    the step log or progress indicator).
+    Generate a short project title from the first user message and persist it
+    to the projects table via ProjectService.update_title.
+    Sends a 'project_title_updated' WS event so FE can update the sidebar.
+
+    Always uses the cheapest available model via llm_service.generate_title()
+    regardless of what model the agent is using — avoids the agent model being
+    invoked with a tiny max_tokens budget and returning a truncated reply as the
+    title.
 
     Called as asyncio.create_task() — does NOT block the main graph execution.
+    Fires only for the first turn of a project (no prior completed turns).
     """
     try:
-        response = await llm_service.ainvoke(
-            [
-                SystemMessage(content=(
-                    "Generate a concise chat title (5-8 words, no punctuation, title case) "
-                    "that describes what the following analytics question is about. "
-                    "Return ONLY the title, nothing else."
-                )),
-                HumanMessage(content=user_message[:400]),
-            ],
-            model=model,
-            max_tokens=30,
-            temperature=0.3,
+        title = await llm_service.generate_title(
+            user_message=user_message,
             provider=provider,
         )
-        title = response.content.strip().strip('"\'') if hasattr(response, "content") else ""
         if not title:
             return
 
-        # Persist title to the chats table
-        chat_svc = ChatService(session_id, supabase_service)
-        await chat_svc.update_chat_title(chat_id, title)
+        # Persist title to the projects table
+        await project_service.update_title(project_id, title)
 
-        # Notify FE — this is NOT a step event, just a metadata update
+        # Notify FE — not a step event, just a sidebar metadata update
         await ws_send({
-            "type": "chat_title_updated",
-            "chat_id": chat_id,
+            "type": "project_title_updated",
+            "project_id": project_id,
             "title": title,
         })
 
-        logger.debug("chat_title_generated", chat_id=chat_id, title=title)
+        logger.info("project_title_generated", project_id=project_id, title=title)
 
     except Exception as exc:
         # Non-fatal — title is optional
-        logger.debug("chat_title_generation_failed", error=str(exc))
+        logger.info("project_title_generation_failed", error=str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -273,8 +266,11 @@ async def handle_chat_agent(
     seq_counter = SeqCounter()
     ws_send = make_ws_sender(ws_send_raw, redis_service, turn_id)
 
+    # chat_id = turn_id: each turn is its own checkpointer thread.
+    # The project_id groups all turns for the same conversation.
+    chat_id = turn_id
+
     # ── 1. Resolve project → database_id ──────────────────────────────
-    # The FE sends project_id only. We fetch the project row to get database_id.
     try:
         project_svc = ProjectService(session_id, supabase_service)
         project_record = await project_svc.get(project_id)
@@ -296,27 +292,17 @@ async def handle_chat_agent(
         ))
         return
 
-    # ── 2. Ensure chat row exists (create if new conversation) ────────
-    existing_chat = await chat_svc.get_chat(chat_id)
-    if not existing_chat:
-        try:
-            await chat_svc.create_chat(
-                database_id=database_id,
-                project_id=project_id,
-                chat_id=chat_id,
-            )
-        except Exception as exc:
-            logger.warning("chat_row_create_failed", chat_id=chat_id, error=str(exc))
-
-    # ── 3. Persist user message ───────────────────────────────────────
+    # ── 2. Persist turn row (output=NULL; filled after graph completes) ──
+    # chat_messages.id = turn_id — used as the LangGraph checkpointer thread_id.
     try:
-        await chat_svc.add_message(
-            chat_id=chat_id,
-            role="user",
-            content={"text": user_message},
+        await chat_svc.create_turn(
+            project_id=project_id,
+            user_message=user_message,
+            turn_id=turn_id,
+            database_id=database_id,
         )
     except Exception as exc:
-        logger.warning("user_message_persist_failed", error=str(exc))
+        logger.warning("turn_create_failed", turn_id=turn_id, error=str(exc))
 
     # ── 4. Load database record ───────────────────────────────────────
     db_record = await _get_database_record(database_id, session_id, supabase_service)
@@ -356,33 +342,31 @@ async def handle_chat_agent(
         for r in full_metadata.get("business_rules", [])
     ]
 
-    # ── 6. Load recent turns ─────────────────────────────────────────────────
-    recent_turns = await _load_recent_turns(chat_id, session_id, supabase_service)
+    # ── 6. Load recent turns (by project_id) ────────────────────────────────
+    recent_turns = await _load_recent_turns(project_id, session_id, supabase_service)
 
-    # ── 7. Auto-title (silent, non-blocking) ─────────────────────────────
-    # Fire when this is a brand-new chat (existing_chat was None) so title is
-    # always set on the first message and never re-set on followup turns.
-    if not existing_chat and not recent_turns:
-        session_svc_title = SessionService(redis_service)
-        llm_service_title = LLMService.from_session(session_id, session_svc_title)
-        asyncio.create_task(_auto_generate_title(
-            chat_id=chat_id,
-            user_message=user_message,
-            session_id=session_id,
-            llm_service=llm_service_title,
-            model=model,
-            provider=provider,
-            ws_send=ws_send,
-            supabase_service=supabase_service,
-        ))
-
-    # ── 8. Build LLM service ─────────────────────────────────────────────────
+    # ── 7. Build LLM service ─────────────────────────────────────────────────
     session_svc = SessionService(redis_service)
     llm_service = LLMService.from_session(session_id, session_svc)
 
+    # ── 8. Auto-title project (fire-and-forget) ──────────────────────────────
+    # Fires only for the first turn of a project (no prior completed turns).
+    # Reuses the main llm_service; result goes to projects table + WS event.
+    if not project_record.get("title") or project_record.get("title") == "Untitled":
+        asyncio.create_task(_auto_generate_project_title(
+            project_id=project_id,
+            user_message=user_message,
+            llm_service=llm_service,
+            provider=provider,
+            ws_send=ws_send,
+            project_service=project_svc,
+        ))
+
     # ── 9. Build initial state ─────────────────────────────────────────────────
+    # chat_id = turn_id (each turn is its own checkpointer thread).
+    # project_id groups all turns for context/history.
     initial_state: dict = {
-        "chat_id":              chat_id,
+        "chat_id":              chat_id,           # = turn_id
         "turn_id":              turn_id,
         "session_id":           session_id,
         "project_id":           project_id,
@@ -406,9 +390,11 @@ async def handle_chat_agent(
     }
 
     # ── 10. Build LangGraph config ────────────────────────────────────────────────
+    # thread_id = turn_id (= chat_id) so each turn is independently checkpointable.
+    # turn_message_id is passed so workers can link artifacts to the right row.
     thread_config: RunnableConfig = {
         "configurable": {
-            "thread_id":        chat_id,          # checkpointer key
+            "thread_id":        turn_id,           # checkpointer key = chat_messages.id
             "model":            model,
             "provider":         provider,
             "ws_send":          ws_send,
@@ -419,6 +405,8 @@ async def handle_chat_agent(
             "chat_service":     chat_svc,
             "full_metadata":    full_metadata,
             "effective_db_id":  database_id,
+            "project_id":       project_id,
+            "turn_message_id":  turn_id,           # = chat_messages.id for artifact FK
         }
     }
 
@@ -431,8 +419,8 @@ async def handle_chat_agent(
 
     try:
         result = await compiled_graph.ainvoke(initial_state, config=thread_config)
-        final_markdown       = result.get("final_markdown", "")
-        follow_up_questions  = result.get("follow_up_questions", [])
+        final_markdown      = result.get("final_markdown", "")
+        follow_up_questions = result.get("follow_up_questions", [])
         artifact_ids = [
             r["artifact_id"]
             for r in result.get("artifact_results", [])
@@ -447,25 +435,23 @@ async def handle_chat_agent(
         ))
         return
 
-    # ── 11. Persist assistant message ─────────────────────────────────
+    # ── 11. Fill in turn output (answer side of the single row) ──────
     try:
-        await chat_svc.add_message(
-            chat_id=chat_id,
-            role="assistant",
-            content={
-                "markdown":             final_markdown,
-                "steps":                [],
-                "artifact_ids":         artifact_ids,
-                "follow_up_questions":  follow_up_questions,
+        await chat_svc.update_turn_output(
+            turn_id=turn_id,
+            output={
+                "markdown":            final_markdown,
+                "artifact_ids":        artifact_ids,
+                "follow_up_questions": follow_up_questions,
             },
         )
     except Exception as exc:
-        logger.warning("assistant_message_persist_failed", error=str(exc))
+        logger.warning("turn_output_update_failed", error=str(exc))
 
     # ── 12. Clean up checkpoint ───────────────────────────────────────
     if checkpointer:
         try:
-            await checkpointer.adelete({"configurable": {"thread_id": chat_id}})
+            await checkpointer.adelete({"configurable": {"thread_id": turn_id}})
         except Exception:
             pass
 

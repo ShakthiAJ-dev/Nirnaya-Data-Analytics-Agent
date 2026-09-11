@@ -49,6 +49,7 @@ LangGraph concepts used
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Any, Literal
 
@@ -60,6 +61,7 @@ from langgraph.types import Command, Send, interrupt
 from app.core.logging import get_logger
 from .events import StepName, make_ask_user, make_final, make_step
 from .prompts import (
+    DECIDE_SCHEMA,
     DECIDE_SYSTEM,
     SYNTHESIZE_SYSTEM,
     build_orchestrator_system_prompt,
@@ -101,42 +103,68 @@ def _model(config: RunnableConfig) -> tuple[str, str | None]:
     return cfg.get("model", _DEFAULT_MODEL), cfg.get("provider")
 
 
+_PREAMBLE_TITLE_RE = re.compile(r"TITLE:\s*(.+?)(?:\n|$)", re.IGNORECASE)
+_PREAMBLE_REASON_RE = re.compile(r"REASON:\s*([\s\S]+?)(?=TITLE:|$)", re.IGNORECASE)
+
+
+def _parse_preamble(preamble: str, fallback_title: str = "") -> tuple[str, str]:
+    """
+    Parse structured TITLE/REASON block from LLM preamble.
+    Returns (title, reasoning). Falls back gracefully when block is absent
+    (e.g. model ignored the instruction) — title = first line, reasoning = full text.
+    """
+    if not preamble:
+        return fallback_title, ""
+    title_m = _PREAMBLE_TITLE_RE.search(preamble)
+    reason_m = _PREAMBLE_REASON_RE.search(preamble)
+    if title_m:
+        title = title_m.group(1).strip()
+        reasoning = reason_m.group(1).strip() if reason_m else preamble.strip()
+        return title or fallback_title, reasoning
+    # No structured block — use first line as title, full text as reasoning
+    lines = preamble.strip().splitlines()
+    title = lines[0].strip()[:100] if lines else fallback_title
+    return title or fallback_title, preamble.strip()
+
+
 def _extract_reasoning(response: AIMessage) -> str:
     """
     Extract the model's actual reasoning/thinking text from an AIMessage.
-
-    Handles:
+    Returns the FULL text — no truncation. Handles:
     - Anthropic extended_thinking: content blocks with type="thinking"
     - Bedrock / other providers: response_metadata.get("thinking")
-    - Plain text fallback: first ~300 chars of text content if no tool calls
+    - Additional kwargs (some providers)
+    - Plain text fallback when there are no tool calls
     Returns an empty string if none found (never crashes).
     """
     try:
         # 1. Anthropic extended_thinking — content is a list of blocks
         if isinstance(response.content, list):
+            thinking_parts: list[str] = []
             for block in response.content:
                 if isinstance(block, dict) and block.get("type") == "thinking":
                     thinking = block.get("thinking", "")
                     if thinking:
-                        return str(thinking)[:600]
+                        thinking_parts.append(str(thinking))
+            if thinking_parts:
+                return "\n\n".join(thinking_parts)
 
         # 2. Bedrock / response_metadata thinking field
         metadata = getattr(response, "response_metadata", {}) or {}
         thinking = metadata.get("thinking") or metadata.get("reasoning")
         if thinking:
-            return str(thinking)[:600]
+            return str(thinking)
 
         # 3. Additional kwargs (some providers surface it here)
         additional = getattr(response, "additional_kwargs", {}) or {}
         thinking = additional.get("thinking") or additional.get("reasoning")
         if thinking:
-            return str(thinking)[:600]
+            return str(thinking)
 
-        # 4. Plain text fallback — only use if no tool calls (avoid dumping JSON)
+        # 4. Plain text fallback — only when no tool calls (avoid dumping JSON tool schema)
         tool_calls = getattr(response, "tool_calls", []) or []
         if not tool_calls and isinstance(response.content, str) and response.content.strip():
-            # Trim to a reasonable size for the UI
-            return response.content.strip()[:400]
+            return response.content.strip()
 
     except Exception:
         pass
@@ -149,32 +177,28 @@ def _extract_reasoning(response: AIMessage) -> str:
 # ---------------------------------------------------------------------------
 
 async def skim_tables_node(state: OrchestratorState, config: RunnableConfig) -> dict:
-    ws_send, seq_counter, llm_service, supabase_service, _, _, full_metadata = await _get_ws(config)
+    ws_send, seq_counter, _, _, _, _, full_metadata = await _get_ws(config)
 
-    seq = await seq_counter.next()
-    await ws_send(make_step(
-        chat_id=state["chat_id"],
+    # Log the full prior conversation turns exactly as they will be formatted into the system prompt
+    recent_turns = state.get("recent_turns", [])
+    logger.info(
+        "chat_messages_context",
         turn_id=state["turn_id"],
-        seq=seq,
-        name=StepName.LOADING_CONTEXT,
-        status="in_progress",
-        title="Loading Database Context",
-        detail=f"Loading schema for {len(state['tables_overview'])} tables",
-        reasoning="Building context window with schema, business rules, and conversation history",
-    ))
-
-    # Build the initial system + user message for the discovery LLM
-    system_prompt = build_orchestrator_system_prompt(
-        schema_name=state["schema_name"],
-        full_metadata=full_metadata,
-        business_rules_index=state["business_rules_index"],
-        recent_turns=state["recent_turns"],
+        recent_turn_count=len(recent_turns),
+        recent_turns=recent_turns,
     )
 
-    seed_messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=state["user_message"]),
-    ]
+    tables = full_metadata.get("tables", {})
+    table_names = list(tables.keys())
+    n_tables = len(table_names)
+    n_rules = len(state.get("business_rules_index", []))
+
+    table_list = ", ".join(table_names) if table_names else "none"
+    reasoning = f"Tables: {table_list}"
+    if n_rules:
+        reasoning += f" · {n_rules} business rule{'s' if n_rules != 1 else ''}"
+    if recent_turns:
+        reasoning += f" · {len(recent_turns)} prior turn{'s' if len(recent_turns) != 1 else ''} in context"
 
     seq = await seq_counter.next()
     await ws_send(make_step(
@@ -183,10 +207,23 @@ async def skim_tables_node(state: OrchestratorState, config: RunnableConfig) -> 
         seq=seq,
         name=StepName.LOADING_CONTEXT,
         status="done",
-        title="Context Loaded",
-        detail=f"Schema with {len(state['tables_overview'])} tables and {len(state['business_rules_index'])} business rules ready",
-        reasoning="",
+        title="Getting the project details ready",
+        detail=f"{n_tables} table{'s' if n_tables != 1 else ''} loaded",
+        reasoning=reasoning,
     ))
+
+    # Build the initial system + user message for the discovery LLM
+    system_prompt = build_orchestrator_system_prompt(
+        schema_name=state["schema_name"],
+        full_metadata=full_metadata,
+        business_rules_index=state["business_rules_index"],
+        recent_turns=recent_turns,
+    )
+
+    seed_messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=state["user_message"]),
+    ]
 
     return {
         "discovery_messages": seed_messages,
@@ -202,6 +239,26 @@ async def skim_tables_node(state: OrchestratorState, config: RunnableConfig) -> 
 # ReAct-style: LLM + tools, loops until ready to decide.
 # ---------------------------------------------------------------------------
 
+
+
+def _preamble_text(response: AIMessage) -> str:
+    """
+    Extract the LLM's plain text preamble that appears *before* any tool calls.
+    Returns empty string if the response is pure text (no tool calls) or has no
+    text content alongside its tool calls.
+    """
+    tool_calls = getattr(response, "tool_calls", []) or []
+    if not tool_calls:
+        return ""  # pure text — handled by shortcut_decide_node path, not here
+    content = response.content
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+        return " ".join(parts).strip()
+    return ""
+
+
 async def discovery_loop_node(state: OrchestratorState, config: RunnableConfig) -> dict:
     ws_send, seq_counter, llm_service, supabase_service, _, _, full_metadata = await _get_ws(config)
 
@@ -215,18 +272,6 @@ async def discovery_loop_node(state: OrchestratorState, config: RunnableConfig) 
         user_message=state["user_message"][:120],
     )
 
-    seq = await seq_counter.next()
-    await ws_send(make_step(
-        chat_id=state["chat_id"],
-        turn_id=state["turn_id"],
-        seq=seq,
-        name=StepName.ANALYZING_QUESTION,
-        status="in_progress",
-        title="Analyzing Question" if iteration == 0 else "Continuing Discovery",
-        detail=f"Exploring schema to understand what data is needed (iteration {iteration + 1})",
-        reasoning="",
-    ))
-
     # Build tools for this turn
     orchestrator_tools = create_orchestrator_tools(
         schema_name=state["schema_name"],
@@ -236,6 +281,7 @@ async def discovery_loop_node(state: OrchestratorState, config: RunnableConfig) 
 
     try:
         model, provider = _model(config)
+        # Log the full conversation history being passed to this LLM call
         logger.info(
             "discovery_loop_llm_call",
             turn_id=state["turn_id"],
@@ -244,6 +290,16 @@ async def discovery_loop_node(state: OrchestratorState, config: RunnableConfig) 
             provider=provider,
             tools=[t.name for t in orchestrator_tools],
             message_count=len(state["discovery_messages"]),
+            chat_history=[
+                {
+                    "role": type(m).__name__,
+                    "content_preview": (
+                        m.content if isinstance(m.content, str)
+                        else str(m.content)
+                    )[:500],
+                }
+                for m in state["discovery_messages"]
+            ],
         )
         response: AIMessage = await llm_service.ainvoke(
             state["discovery_messages"],
@@ -255,7 +311,6 @@ async def discovery_loop_node(state: OrchestratorState, config: RunnableConfig) 
         )
     except Exception as exc:
         logger.error("discovery_loop_llm_error", turn_id=state["turn_id"], error=str(exc))
-        # Return error state — will route to direct_response with error message
         return {
             "discovery_messages": [AIMessage(content=f"Error during discovery: {exc}")],
             "discovery_iterations": iteration + 1,
@@ -271,10 +326,19 @@ async def discovery_loop_node(state: OrchestratorState, config: RunnableConfig) 
         content_preview=(response.content if isinstance(response.content, str) else str(response.content))[:200],
     )
 
-    # Extract real reasoning text from the model response
+    # Extract reasoning / thinking blocks (full, untruncated)
     reasoning_text = _extract_reasoning(response)
 
-    # Emit a "done" step with the LLM's actual reasoning
+    # Extract LLM preamble (text before tool calls) — this is the model's own reasoning
+    preamble = _preamble_text(response)
+
+    # Parse structured TITLE/REASON from preamble; fall back to thinking blocks
+    _fallback_title = "Got the Lay of the Land" if iteration == 0 else "Dug a Little Deeper"
+    display_title, display_reasoning = _parse_preamble(preamble, _fallback_title)
+    if not display_reasoning:
+        display_reasoning = reasoning_text  # use thinking blocks if preamble absent
+
+    # Emit a "done" step with LLM-generated title + reasoning
     seq = await seq_counter.next()
     await ws_send(make_step(
         chat_id=state["chat_id"],
@@ -282,9 +346,9 @@ async def discovery_loop_node(state: OrchestratorState, config: RunnableConfig) 
         seq=seq,
         name=StepName.ANALYZING_QUESTION,
         status="done",
-        title="Question Analyzed" if iteration == 0 else "Discovery Continued",
-        detail=f"Completed analysis iteration {iteration + 1}",
-        reasoning=reasoning_text,
+        title=display_title,
+        detail="Ready to look at the data" if iteration == 0 else "Gathered more context",
+        reasoning=display_reasoning,
     ))
 
     return {
@@ -297,11 +361,12 @@ async def discovery_loop_node(state: OrchestratorState, config: RunnableConfig) 
 # Edge routing from discovery_loop
 # ---------------------------------------------------------------------------
 
-def route_after_discovery(state: OrchestratorState) -> Literal["tool_executor", "decide_node"]:
+def route_after_discovery(state: OrchestratorState) -> Literal["tool_executor", "shortcut_decide_node", "decide_node"]:
     """
     Route based on the last AI message:
     - Has tool_calls AND not all are signal_ready_to_decide → run tools
-    - No tool_calls OR called signal_ready_to_decide → decide
+    - No tool_calls + non-empty text content → shortcut_decide_node (reuse text, skip LLM)
+    - No tool_calls + empty content OR signal_ready_to_decide only → decide_node (LLM needed)
     - Max iterations exceeded → force decide
     """
     iteration = state.get("discovery_iterations", 0)
@@ -315,8 +380,20 @@ def route_after_discovery(state: OrchestratorState) -> Literal["tool_executor", 
 
     last = messages[-1]
     tool_calls = getattr(last, "tool_calls", []) or []
+
     if not tool_calls:
-        logger.info("discovery_routing", decision="decide_node", reason="no_tool_calls", iteration=iteration)
+        # Check if the AI message already contains a usable text answer.
+        # If so, we can bypass the decide_node LLM call entirely.
+        content = last.content if isinstance(last.content, str) else ""
+        if not content and isinstance(last.content, list):
+            content = " ".join(
+                b.get("text", "") for b in last.content
+                if isinstance(b, dict) and b.get("type") == "text"
+            ).strip()
+        if content and len(content.strip()) > 20:  # meaningful text answer
+            logger.info("discovery_routing", decision="shortcut_decide_node", reason="direct_text_answer", iteration=iteration)
+            return "shortcut_decide_node"
+        logger.info("discovery_routing", decision="decide_node", reason="no_tool_calls_empty_content", iteration=iteration)
         return "decide_node"
 
     # If ONLY tool call is signal_ready_to_decide → go to decide
@@ -334,7 +411,7 @@ def route_after_discovery(state: OrchestratorState) -> Literal["tool_executor", 
 # ---------------------------------------------------------------------------
 
 async def tool_executor_node(state: OrchestratorState, config: RunnableConfig) -> dict:
-    ws_send, seq_counter, llm_service, supabase_service, redis_service, _, full_metadata = await _get_ws(config)
+    _, _, _, supabase_service, _, _, full_metadata = await _get_ws(config)
 
     orchestrator_tools = create_orchestrator_tools(
         schema_name=state["schema_name"],
@@ -347,15 +424,21 @@ async def tool_executor_node(state: OrchestratorState, config: RunnableConfig) -
     last_ai = messages[-1]
     tool_calls = getattr(last_ai, "tool_calls", []) or []
 
+    # Log preamble title from the AI message that triggered these tool calls
+    raw_preamble = _preamble_text(last_ai)
+    _preamble_title, _ = _parse_preamble(raw_preamble)
+
     logger.info(
         "tool_executor_start",
         turn_id=state["turn_id"],
         tool_count=len(tool_calls),
         tools=[{"name": tc["name"], "args": tc["args"]} for tc in tool_calls],
+        preamble_title=_preamble_title,
     )
 
     tool_messages: list[ToolMessage] = []
     new_discovery_results: list[dict] = []
+    new_fetched_details: dict = {}  # populated when get_table_details is called
 
     for tc in tool_calls:
         tool_name = tc["name"]
@@ -378,18 +461,7 @@ async def tool_executor_node(state: OrchestratorState, config: RunnableConfig) -
             args=tool_args,
         )
 
-        seq = await seq_counter.next()
-        await ws_send(make_step(
-            chat_id=state["chat_id"],
-            turn_id=state["turn_id"],
-            seq=seq,
-            name=StepName.RUNNING_DISCOVERY,
-            status="in_progress",
-            title=f"Running Tool: {tool_name.replace('_', ' ').title()}",
-            detail=str(tool_args)[:200],
-            reasoning="",
-        ))
-
+        # Use LLM-parsed title from preamble if available; fall back to tool display name
         try:
             tool_fn = tool_map.get(tool_name)
             if tool_fn is None:
@@ -399,6 +471,11 @@ async def tool_executor_node(state: OrchestratorState, config: RunnableConfig) -
                 if isinstance(result, list):
                     # run_discovery_queries returns a list
                     new_discovery_results.extend(result)
+                elif tool_name == "get_table_details" and isinstance(result, dict):
+                    # Cache fetched details so workers can reuse without re-fetching
+                    new_fetched_details.update(
+                        {k: v for k, v in result.items() if "error" not in v}
+                    )
                 result_str = json.dumps(result) if not isinstance(result, str) else result
             logger.info(
                 "tool_result",
@@ -424,6 +501,8 @@ async def tool_executor_node(state: OrchestratorState, config: RunnableConfig) -
     updates: dict[str, Any] = {"discovery_messages": tool_messages}
     if new_discovery_results:
         updates["discovery_results"] = state.get("discovery_results", []) + new_discovery_results
+    if new_fetched_details:
+        updates["fetched_table_details"] = {**state.get("fetched_table_details", {}), **new_fetched_details}
 
     logger.info(
         "tool_executor_done",
@@ -438,8 +517,28 @@ async def tool_executor_node(state: OrchestratorState, config: RunnableConfig) -
 # Node: decide_node — forced structured output
 # ---------------------------------------------------------------------------
 
-async def decide_node(state: OrchestratorState, config: RunnableConfig) -> dict:
-    ws_send, seq_counter, llm_service, *_ = await _get_ws(config)
+async def shortcut_decide_node(state: OrchestratorState, config: RunnableConfig) -> dict:
+    """
+    Fast path: the discovery LLM already produced a complete text answer with no
+    tool calls. Wrap it in a decide_output dict and skip the decide_node LLM call
+    entirely — saving one full LLM round trip.
+    """
+    ws_send, seq_counter, *_ = await _get_ws(config)
+
+    messages = state.get("discovery_messages", [])
+    last = messages[-1] if messages else None
+    content = ""
+    if last is not None:
+        raw = last.content
+        if isinstance(raw, str):
+            content = raw.strip()
+        elif isinstance(raw, list):
+            content = " ".join(
+                b.get("text", "") for b in raw
+                if isinstance(b, dict) and b.get("type") == "text"
+            ).strip()
+
+    decide_output = {"action": "direct_response", "markdown": content}
 
     seq = await seq_counter.next()
     await ws_send(make_step(
@@ -447,11 +546,18 @@ async def decide_node(state: OrchestratorState, config: RunnableConfig) -> dict:
         turn_id=state["turn_id"],
         seq=seq,
         name=StepName.DECIDING,
-        status="in_progress",
-        title="Making Decision",
-        detail="Determining how to best answer this question",
+        status="done",
+        title="Crafting Your Answer",
+        detail="Using the findings to write a clear response",
         reasoning="",
     ))
+
+    logger.info("shortcut_decide", turn_id=state["turn_id"], markdown_len=len(content))
+    return {"decide_output": decide_output}
+
+
+async def decide_node(state: OrchestratorState, config: RunnableConfig) -> dict:
+    ws_send, seq_counter, llm_service, *_ = await _get_ws(config)
 
     # Build decision prompt
     discovery_summary = _summarise_discovery(state)
@@ -461,21 +567,27 @@ async def decide_node(state: OrchestratorState, config: RunnableConfig) -> dict:
         HumanMessage(content=(
             f"User question: {state['user_message']}\n\n"
             f"Discovery findings:\n{discovery_summary}\n\n"
-            "Choose one action and return it as JSON:\n\n"
-            "Option A — Direct response (no data needed):\n"
-            '{"action": "direct_response", "markdown": "...your full answer here..."}\n\n'
-            "Option B — Ask user for clarification:\n"
-            '{"action": "ask_user", "question": "...", "mode": "mcq"|"free_text", "options": [...] or null}\n\n'
-            "Option C — Dispatch artifact workers:\n"
-            '{"action": "dispatch_artifacts", "artifacts": [{"artifact_type": "kpi"|"chart"|"table", '
-            '"task_description": "...", "tables_in_scope": [...], "suggested_chart_type": null|"line"|..., '
-            '"metric_clarification": "shared definitions all artifacts must follow", '
-            '"relevant_business_rule_ids": [...]}]}'
+            "Choose one action and return it as JSON. Always include step_title and reasoning.\n\n"
+            f"Option A — Direct response (no data needed):\n{DECIDE_SCHEMA['direct_response']}\n\n"
+            f"Option B — Ask user for clarification:\n{DECIDE_SCHEMA['ask_user']}\n\n"
+            f"Option C — Dispatch artifact workers:\n{DECIDE_SCHEMA['dispatch_artifacts']}"
         )),
     ]
 
+    # Log messages being passed so we can trace what the LLM sees
+    logger.info(
+        "decide_node_messages",
+        turn_id=state["turn_id"],
+        message_count=len(decide_messages),
+        messages_preview=[
+            {"role": type(m).__name__, "content_preview": (m.content if isinstance(m.content, str) else str(m.content))[:300]}
+            for m in decide_messages
+        ],
+    )
+
     decide_output: dict = {}
     reasoning_text = ""
+    step_title = ""
     try:
         model, provider = _model(config)
         logger.info(
@@ -492,20 +604,27 @@ async def decide_node(state: OrchestratorState, config: RunnableConfig) -> dict:
             temperature=0.1,
             provider=provider,
         )
-        reasoning_text = _extract_reasoning(response)
+        reasoning_text = _extract_reasoning(response)  # thinking blocks if present
         content = response.content if isinstance(response.content, str) else ""
         # Strip markdown code fences if model wraps in ```json
         content = content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         decide_output = json.loads(content)
+        # Pull LLM-generated title + reasoning out of the JSON output
+        step_title = decide_output.pop("step_title", "")  # remove from output dict — not needed downstream
+        llm_reasoning = decide_output.pop("reasoning", "")
+        # Prefer explicit LLM reasoning over thinking blocks
+        if llm_reasoning:
+            reasoning_text = llm_reasoning
         logger.info(
             "decide_node_output",
             turn_id=state["turn_id"],
             action=decide_output.get("action"),
+            step_title=step_title,
             artifact_count=len(decide_output.get("artifacts", [])),
             artifact_types=[a.get("artifact_type") for a in decide_output.get("artifacts", [])],
             artifact_tasks=[a.get("task_description", "")[:80] for a in decide_output.get("artifacts", [])],
             question=decide_output.get("question", ""),
-            reasoning_preview=reasoning_text[:150],
+            reasoning=reasoning_text,
         )
     except Exception as exc:
         logger.warning("decide_node_parse_error", turn_id=state["turn_id"], error=str(exc))
@@ -515,23 +634,28 @@ async def decide_node(state: OrchestratorState, config: RunnableConfig) -> dict:
             "markdown": "I had trouble deciding how to answer that. Could you rephrase your question?",
         }
 
-    # Emit done step with the model's actual reasoning
+    # Emit done step — use LLM-generated title when available, fall back to action-derived title
     seq = await seq_counter.next()
     action = decide_output.get("action", "direct_response")
+    _action_titles = {
+        "direct_response":    "Crafting Your Answer",
+        "dispatch_artifacts": "Planning the Analysis",
+        "ask_user":           "Need a Quick Clarification",
+    }
+    _action_details = {
+        "direct_response":    "Writing a clear, direct response",
+        "dispatch_artifacts": f"Preparing {len(decide_output.get('artifacts', []))} visual{'s' if len(decide_output.get('artifacts', [])) != 1 else ''} for you",
+        "ask_user":           decide_output.get("question", ""),
+    }
     await ws_send(make_step(
         chat_id=state["chat_id"],
         turn_id=state["turn_id"],
         seq=seq,
         name=StepName.DECIDING,
         status="done",
-        title=f"Decision: {action.replace('_', ' ').title()}",
-        detail=(
-            f"Dispatching {len(decide_output.get('artifacts', []))} artifact(s)"
-            if action == "dispatch_artifacts"
-            else decide_output.get("question", "") if action == "ask_user"
-            else "Generating direct response"
-        ),
-        reasoning=reasoning_text,
+        title=step_title or _action_titles.get(action, "Crafting Your Answer"),
+        detail=_action_details.get(action, ""),
+        reasoning=reasoning_text,  # full, untruncated
     ))
 
     return {"decide_output": decide_output}
@@ -668,7 +792,7 @@ async def direct_response_node(state: OrchestratorState, config: RunnableConfig)
         turn_id=state["turn_id"],
         seq=seq,
         markdown=markdown,
-        artifact_ids=[],
+        artifacts=[],           # direct response has no artifacts
         follow_up_questions=follow_ups,
     ))
 
@@ -828,8 +952,8 @@ async def join_artifacts_node(state: OrchestratorState, config: RunnableConfig) 
         seq=seq,
         name=StepName.JOINING_RESULTS,
         status="done",
-        title="All Artifacts Ready",
-        detail=f"{fresh} artifact(s) built successfully" + (f", {errors} failed" if errors else ""),
+        title="Charts and Tables Built",
+        detail=f"{fresh} visual{'s' if fresh != 1 else ''} ready" + (f" · {errors} couldn't be built" if errors else ""),
         reasoning="",
     ))
 
@@ -842,18 +966,6 @@ async def join_artifacts_node(state: OrchestratorState, config: RunnableConfig) 
 
 async def synthesize_final_node(state: OrchestratorState, config: RunnableConfig) -> dict:
     ws_send, seq_counter, llm_service, *_ = await _get_ws(config)
-
-    seq = await seq_counter.next()
-    await ws_send(make_step(
-        chat_id=state["chat_id"],
-        turn_id=state["turn_id"],
-        seq=seq,
-        name=StepName.SYNTHESIZING,
-        status="in_progress",
-        title="Writing Analysis",
-        detail="Synthesizing insights from all artifacts",
-        reasoning="",
-    ))
 
     results = state.get("artifact_results", [])
     results_summary = json.dumps([
@@ -873,9 +985,21 @@ async def synthesize_final_node(state: OrchestratorState, config: RunnableConfig
         HumanMessage(content=(
             f"User's original question: {state['user_message']}\n\n"
             f"Artifact results:\n{results_summary}\n\n"
-            'Return JSON: {"markdown": "...", "follow_up_questions": ["...", "...", "..."]}'
+            'Return JSON: {"markdown": "...", "follow_up_questions": ["...", "...", "..."], "step_title": "...", "reasoning": "..."}'
         )),
     ]
+
+    # Log messages being passed to synthesize LLM
+    logger.info(
+        "synthesize_node_messages",
+        turn_id=state["turn_id"],
+        message_count=len(synth_messages),
+        artifact_count=len(results),
+        messages_preview=[
+            {"role": type(m).__name__, "content_preview": (m.content if isinstance(m.content, str) else str(m.content))[:300]}
+            for m in synth_messages
+        ],
+    )
 
     markdown = ""
     follow_ups: list[str] = []
@@ -896,19 +1020,25 @@ async def synthesize_final_node(state: OrchestratorState, config: RunnableConfig
             temperature=0.3,
             provider=provider,
         )
-        reasoning_text = _extract_reasoning(response)
+        reasoning_text = _extract_reasoning(response)  # thinking blocks if present
         content = response.content if isinstance(response.content, str) else ""
         content = content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         parsed = json.loads(content)
         markdown = parsed.get("markdown", "")
         follow_ups = parsed.get("follow_up_questions", [])[:3]
+        # Pull LLM-generated title + reasoning from JSON output
+        synth_step_title = parsed.get("step_title", "")
+        llm_reasoning = parsed.get("reasoning", "")
+        if llm_reasoning:
+            reasoning_text = llm_reasoning  # prefer explicit reasoning over thinking blocks
         logger.info(
             "synthesize_output",
             turn_id=state["turn_id"],
+            step_title=synth_step_title,
             markdown_len=len(markdown),
             follow_up_count=len(follow_ups),
             follow_ups=follow_ups,
-            reasoning_preview=reasoning_text[:150],
+            reasoning=reasoning_text,
         )
     except Exception as exc:
         logger.warning("synthesize_parse_error", turn_id=state["turn_id"], error=str(exc))
@@ -919,10 +1049,28 @@ async def synthesize_final_node(state: OrchestratorState, config: RunnableConfig
             lines.append(f"\n**{r['title']}**: {r['note']}")
         markdown = "\n".join(lines)
         follow_ups = []
+        synth_step_title = ""
 
+    # Build the full artifact payload list for the WS event
+    artifacts_payload = [
+        {
+            "artifact_id":   r["artifact_id"],
+            "type":          r["type"],
+            "title":         r["title"],
+            "note":          r["note"],
+            "key_numbers":   r["key_numbers"],
+            "status":        r["status"],
+            "error_message": r.get("error_message"),
+            "config":        r.get("config", {}),
+            "result_data":   r.get("result_data", []),
+            "sql_query":     r.get("sql_query", ""),
+        }
+        for r in results
+        if r["status"] == "fresh"
+    ]
     artifact_ids = [r["artifact_id"] for r in results if r["status"] == "fresh"]
 
-    # Emit synthesize done step with actual LLM reasoning before the final event
+    # Emit synthesize done step — use LLM-generated title when available
     seq = await seq_counter.next()
     await ws_send(make_step(
         chat_id=state["chat_id"],
@@ -930,9 +1078,9 @@ async def synthesize_final_node(state: OrchestratorState, config: RunnableConfig
         seq=seq,
         name=StepName.SYNTHESIZING,
         status="done",
-        title="Analysis Ready",
-        detail=f"Generated insights from {len(artifact_ids)} artifact(s)",
-        reasoning=reasoning_text,
+        title=synth_step_title or "Your Analysis Is Ready",
+        detail=f"{len(artifact_ids)} visual{'s' if len(artifact_ids) != 1 else ''} with full insights",
+        reasoning=reasoning_text,  # full, untruncated
     ))
 
     seq = await seq_counter.next()
@@ -941,7 +1089,7 @@ async def synthesize_final_node(state: OrchestratorState, config: RunnableConfig
         turn_id=state["turn_id"],
         seq=seq,
         markdown=markdown,
-        artifact_ids=artifact_ids,
+        artifacts=artifacts_payload,
         follow_up_questions=follow_ups,
     ))
 
@@ -995,6 +1143,7 @@ def build_orchestrator_graph(checkpointer: Any = None):
     graph.add_node("skim_tables", skim_tables_node)
     graph.add_node("discovery_loop", discovery_loop_node)
     graph.add_node("tool_executor", tool_executor_node)
+    graph.add_node("shortcut_decide_node", shortcut_decide_node)  # fast path: skips decide LLM
     graph.add_node("decide_node", decide_node)
     graph.add_node("direct_response_node", direct_response_node)
     graph.add_node("ask_user_node", ask_user_node)
@@ -1010,9 +1159,22 @@ def build_orchestrator_graph(checkpointer: Any = None):
     graph.add_conditional_edges(
         "discovery_loop",
         route_after_discovery,
-        {"tool_executor": "tool_executor", "decide_node": "decide_node"},
+        {
+            "tool_executor": "tool_executor",
+            "shortcut_decide_node": "shortcut_decide_node",
+            "decide_node": "decide_node",
+        },
     )
     graph.add_edge("tool_executor", "discovery_loop")
+    # shortcut_decide_node skips the decide LLM — goes straight to route_after_decide
+    graph.add_conditional_edges(
+        "shortcut_decide_node",
+        route_after_decide,
+        {
+            "direct_response_node": "direct_response_node",
+            "ask_user_node": "ask_user_node",
+        },
+    )
 
     graph.add_conditional_edges(
         "decide_node",

@@ -109,8 +109,9 @@ class WorkerState(TypedDict):
 class ArtifactResult(TypedDict):
     """
     Compact summary returned from each worker to the orchestrator.
-    Used by join_artifacts and synthesize_final.
-    Full result_data lives in the Postgres artifacts row, not here.
+    Carries both the DB identifier and the full payload for the final WS event
+    so FE receives everything it needs without an extra REST call.
+    result_data is also stored in Postgres artifacts (capped at 1000 rows).
     """
     artifact_id: str
     type: str                           # 'kpi' | 'chart' | 'table'
@@ -119,3 +120,7 @@ class ArtifactResult(TypedDict):
     key_numbers: dict[str, Any]         # e.g. {"value": 48213.5, "delta_pct": 12.4}
     status: str                         # 'fresh' | 'error'
     error_message: str | None
+    # Full payload for the WS final event
+    config: dict[str, Any]             # chart encoding / kpi format / table columns
+    result_data: list[dict[str, Any]]  # actual data rows (up to 1000)
+    sql_query: str                     # the SQL that produced this artifact

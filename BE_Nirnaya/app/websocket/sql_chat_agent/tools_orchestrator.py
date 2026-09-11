@@ -51,23 +51,65 @@ def create_orchestrator_tools(
     @tool
     async def get_table_details(table_names: list[str]) -> dict:
         """
-        Get detailed schema information for one or more tables, including
-        all column names, data types, min/max/avg stats (numeric), and
-        unique values (categorical). Use this when you need to understand
-        exactly what columns are available for a specific table.
+        Get detailed schema information for one or more tables, including all
+        column names, data types, nullability, numeric stats (min/max/avg for
+        numeric columns), and distinct-value counts for categorical columns.
+
+        NOTE: Unique-value *lists* for categorical columns are NOT included here
+        to keep the response compact. Call get_column_unique_values() to get
+        the actual list of values for a specific column.
+
+        Use this tool before writing any SQL — the system-prompt schema shows
+        only table overviews, not individual columns.
 
         Args:
             table_names: List of table names (without schema prefix).
         Returns:
-            Dict mapping table_name → full column details.
+            Dict mapping table_name → {overview, grain, use_case, key_columns,
+            domain_tags, key_notes, currency, timezone, row_count, columns[...]}.
         """
         result = {}
         for tname in table_names:
-            if tname in tables:
-                result[tname] = tables[tname]
-            else:
+            if tname not in tables:
                 result[tname] = {"error": f"Table '{tname}' not found in metadata."}
+                continue
+            tinfo = tables[tname]
+            detail: dict = {
+                "overview":    tinfo.get("overview", ""),
+                "grain":       tinfo.get("grain", ""),
+                "use_case":    tinfo.get("use_case", ""),
+                "key_columns": tinfo.get("key_columns", []),
+                "domain_tags": tinfo.get("domain_tags", []),
+                "key_notes":   tinfo.get("key_notes", ""),
+                "currency":    tinfo.get("currency"),
+                "timezone":    tinfo.get("timezone"),
+                "row_count":   tinfo.get("row_count"),
+                "columns":     [],
+            }
+            for col in tinfo.get("columns", []):
+                col_entry: dict = {
+                    "name":       col["name"],
+                    "data_type":  col.get("data_type", ""),
+                    "type_class": col.get("type_class", ""),
+                    "nullable":   col.get("nullable", True),
+                }
+                # Numeric stats
+                if col.get("type_class") == "numeric" and col.get("min") is not None:
+                    col_entry["min"] = col["min"]
+                    col_entry["max"] = col["max"]
+                    avg = col.get("avg")
+                    col_entry["avg"] = round(avg, 2) if avg is not None else None
+                # Distinct count (not the list) for categorical columns
+                uvc = col.get("unique_values_count")
+                if uvc:
+                    col_entry["unique_values_count"] = uvc
+                null_c = col.get("null_count")
+                if null_c:
+                    col_entry["null_count"] = null_c
+                detail["columns"].append(col_entry)
+            result[tname] = detail
         return result
+
 
     # ------------------------------------------------------------------
     # Tool: get_column_unique_values
