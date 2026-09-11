@@ -1165,12 +1165,69 @@ class DatabaseService:
     # Session cleanup
     # ------------------------------------------------------------------
 
+    async def _delete_storage_folder(self, folder_path: str) -> int:
+        """
+        Recursively delete all files under folder_path in the session bucket.
+        Returns total files deleted. Folders appear as items without an 'id'.
+        """
+        deleted = 0
+        try:
+            items = await self._supa.admin.storage.from_(BUCKET).list(folder_path)
+            if not items:
+                return 0
+            file_paths = [f"{folder_path}/{item['name']}" for item in items if item.get("id")]
+            subfolder_names = [item["name"] for item in items if not item.get("id")]
+            if file_paths:
+                await self._supa.admin.storage.from_(BUCKET).remove(file_paths)
+                deleted += len(file_paths)
+            for sub in subfolder_names:
+                deleted += await self._delete_storage_folder(f"{folder_path}/{sub}")
+        except Exception as exc:
+            logger.debug("storage_folder_delete_failed", path=folder_path, error=str(exc))
+        return deleted
+
     async def cleanup_session(self) -> dict[str, Any]:
-        """Delete all databases and projects owned by this session."""
-        databases = await self.list_databases()
-        deleted_databases: list[str] = []
+        """
+        Delete ALL data for this session:
+          - Checkpoint rows (checkpoints, checkpoint_blobs, checkpoint_writes)
+          - All user database schemas + uploaded files + metadata
+          - Projects (CASCADE → chat_messages, artifacts)
+          - Entire storage root folder {session_id}/
+        """
         errors: list[dict] = []
 
+        # 1. Collect turn_ids BEFORE deleting (needed to clean checkpoint tables)
+        turn_ids: list[str] = []
+        try:
+            resp = await (
+                self._supa.admin.table("chat_messages")
+                .select("id")
+                .eq("session_id", self._session_id)
+                .execute()
+            )
+            turn_ids = [r["id"] for r in (resp.data or [])]
+        except Exception as exc:
+            logger.warning("cleanup_collect_turns_failed", error=str(exc))
+
+        # 2. Delete LangGraph checkpoint rows for all turns in this session
+        if turn_ids:
+            id_list = ", ".join(f"'{tid}'" for tid in turn_ids)
+            for cp_table in ("checkpoints", "checkpoint_blobs", "checkpoint_writes"):
+                try:
+                    await self._exec_sql(
+                        f"DELETE FROM public.{cp_table} WHERE thread_id IN ({id_list});"
+                    )
+                except Exception as exc:
+                    # Tables won't exist when MemorySaver is used — safe to skip
+                    logger.debug(
+                        "cleanup_checkpoint_skip",
+                        table=cp_table,
+                        error=str(exc)[:120],
+                    )
+
+        # 3. Delete all user databases (DROP SCHEMA + storage files + DB records)
+        databases = await self.list_databases()
+        deleted_databases: list[str] = []
         for db in databases:
             try:
                 await self.delete_database(db["id"])
@@ -1179,6 +1236,7 @@ class DatabaseService:
                 errors.append({"database_id": db["id"], "error": str(exc)})
                 logger.warning("cleanup_db_failed", database_id=db["id"], error=str(exc))
 
+        # 4. Delete projects → CASCADE deletes chat_messages + artifacts
         deleted_projects = 0
         try:
             resp = await (
@@ -1191,15 +1249,22 @@ class DatabaseService:
         except Exception as exc:
             errors.append({"resource": "projects", "error": str(exc)})
 
+        # 5. Sweep any remaining storage files under {session_id}/
+        storage_deleted = await self._delete_storage_folder(self._session_id)
+
         logger.info(
             "session_cleanup_done",
             session_id=self._session_id,
             databases_deleted=len(deleted_databases),
             projects_deleted=deleted_projects,
+            checkpoint_turns_cleaned=len(turn_ids),
+            storage_files_deleted=storage_deleted,
         )
         return {
             "databases_deleted": len(deleted_databases),
             "projects_deleted": deleted_projects,
+            "turns_cleaned": len(turn_ids),
+            "storage_files_deleted": storage_deleted,
             "errors": errors,
         }
 

@@ -202,14 +202,21 @@ class ChatService:
                 .select("id, user_message, output, seq, created_at")
                 .eq("project_id", project_id)
                 .eq("session_id", self._session_id)
-                .not_.is_("output", "null")
+                .filter("output", "not.is", "null")   # output IS NOT NULL (completed turns only)
                 .order("seq", desc=True)
                 .limit(limit)
                 .execute()
             )
             rows = resp.data or []
+            logger.info(
+                "get_recent_turns",
+                project_id=project_id,
+                session_id=self._session_id,
+                rows_found=len(rows),
+            )
             return list(reversed(rows))  # restore chronological order
-        except Exception:
+        except Exception as exc:
+            logger.warning("get_recent_turns_failed", project_id=project_id, error=str(exc))
             return []
 
     # ------------------------------------------------------------------

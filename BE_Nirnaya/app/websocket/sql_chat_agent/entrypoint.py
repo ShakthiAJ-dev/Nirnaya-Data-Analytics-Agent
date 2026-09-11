@@ -181,6 +181,14 @@ async def _load_recent_turns(
                 "content": {"markdown": output.get("markdown", "")[:400]},
                 "artifact_titles": output.get("artifact_ids", []),
             })
+
+    logger.info(
+        "recent_turns_loaded",
+        project_id=project_id,
+        raw_rows=len(rows),
+        turns_built=len(turns),
+        turns=turns,   # log full content so we can verify what goes into the prompt
+    )
     return turns
 
 

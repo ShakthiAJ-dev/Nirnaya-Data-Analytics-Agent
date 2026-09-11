@@ -12,9 +12,12 @@ DELETE /api/v1/session/cleanup                 — cleanup all session data
 """
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 
+from app.core.config import settings
 from app.core.dependencies import RedisDep, get_session_service
 from app.core.exceptions import SessionException, ValidationException
 from app.core.logging import get_logger
@@ -261,12 +264,66 @@ async def preview_table(
     "/session/cleanup",
     status_code=status.HTTP_200_OK,
     summary="Cleanup all session data",
-    description="Deletes all databases (schemas + files + metadata) and projects for this session.",
+    description=(
+        "Triggered by QStash after session TTL. Deletes all session data. "
+        "Verifies Upstash-Signature when QStash signing keys are configured."
+    ),
 )
 async def cleanup_session(request: Request, redis: RedisDep) -> JSONResponse:
-    session_id, _ = await _require_session(request, redis)
+    raw_body = await request.body()
+
+    # Verify QStash signature when signing keys are present
+    if settings.qstash_current_signing_key:
+        from qstash import Receiver
+        sig = request.headers.get("Upstash-Signature", "")
+        if not sig:
+            return JSONResponse(
+                status_code=401,
+                content={"success": False, "error": "Missing Upstash-Signature header."},
+            )
+        receiver = Receiver(
+            current_signing_key=settings.qstash_current_signing_key,
+            next_signing_key=settings.qstash_next_signing_key,
+        )
+        try:
+            receiver.verify(signature=sig, body=raw_body.decode())
+        except Exception as exc:
+            logger.warning("qstash_signature_invalid", error=str(exc))
+            return JSONResponse(
+                status_code=401,
+                content={"success": False, "error": "Invalid QStash signature."},
+            )
+
+    body = json.loads(raw_body)
+    session_id: str = body.get("session_id", "").strip()
+    if not session_id:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": "session_id required in body."},
+        )
+
+    # DB + schemas + checkpoints + storage cleanup
     result = await DatabaseService(session_id, _supabase(request)).cleanup_session()
+
+    # Redis cleanup: session metadata, API keys, chat history, rate-limit counters
+    redis_deleted = 0
+    try:
+        for pattern in (
+            f"nirnaya:session:{session_id}*",   # session + key + history
+            f"nirnaya:rate:{session_id}*",       # rate-limit buckets
+            f"nirnaya:cache:{session_id}*",      # any cache keyed by session
+        ):
+            async for key in redis.client.scan_iter(pattern):
+                await redis.client.delete(key)
+                redis_deleted += 1
+    except Exception:
+        pass
+
     return JSONResponse(
         status_code=status.HTTP_200_OK,
-        content={"success": True, "data": result, "message": "Session data cleaned up."},
+        content={
+            "success": True,
+            "data": {**result, "redis_keys_deleted": redis_deleted},
+            "message": "Session data cleaned up.",
+        },
     )

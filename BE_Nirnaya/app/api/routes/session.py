@@ -21,6 +21,10 @@ Security notes
 """
 
 from __future__ import annotations
+
+import asyncio
+import json
+from functools import partial
 from typing import Any
 
 import re
@@ -43,8 +47,34 @@ from app.services.session_service import SessionService, verify_token
 
 logger = get_logger(__name__)
 
-
 router = APIRouter(prefix="/session", tags=["Session"])
+
+
+# ---------------------------------------------------------------------------
+# QStash: schedule delayed session cleanup
+# ---------------------------------------------------------------------------
+
+def _publish_cleanup_job(session_id: str) -> None:
+    """Publish a delayed DELETE to /session/cleanup via QStash (sync — run in executor)."""
+    from qstash import QStash  # imported lazily to avoid startup cost if unconfigured
+    client = QStash(token=settings.qstash_token)
+    url = f"{settings.app_base_url.rstrip('/')}/api/v1/session/cleanup"
+    client.message.publish_json(
+        url=url,
+        body={"session_id": session_id},
+        delay=settings.session_ttl,
+        method="DELETE",
+    )
+
+
+async def _schedule_cleanup(session_id: str) -> None:
+    """Fire-and-forget async wrapper — runs sync QStash call in thread executor."""
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, partial(_publish_cleanup_job, session_id))
+        logger.info("cleanup_job_scheduled", session_id=session_id, delay=settings.session_ttl)
+    except Exception as exc:
+        logger.warning("cleanup_job_schedule_failed", session_id=session_id, error=str(exc))
 
 
 
@@ -137,6 +167,10 @@ async def session_init(
 
     svc = get_session_service(redis)
     session_id, token = await svc.create_session()
+
+    # Schedule cleanup job after session TTL (fire-and-forget, skip if QStash not configured)
+    if settings.qstash_token:
+        asyncio.create_task(_schedule_cleanup(session_id))
 
     logger.info(
         "session_init_success",
