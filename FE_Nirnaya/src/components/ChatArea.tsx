@@ -11,17 +11,21 @@ import {
   ArrowRight,
   Database,
   KeyRound,
+  ChevronDown,
 } from 'lucide-react';
 import { LogoEmblem } from './Logo';
-import type { Message, Project } from '../types';
-import { AVAILABLE_MODELS } from '../constants/models';
+import type { Message, Project, Database as DatabaseType } from '../types';
 import type { BackendModel } from '../services/sessionService';
 
 interface ChatAreaProps {
-  currentProject: Project;
+  currentProject: Project | null;
   messages: Message[];
   selectedModelId: string;
   isLoading: boolean;
+  isDataLoaded?: boolean;
+  pendingDatabaseName?: string;
+  availableDatabasesForPicker?: Pick<DatabaseType, 'id' | 'name'>[];
+  onSelectDatabase?: (dbId: string) => void;
   onSendSuggestedPrompt: (prompt: string) => void;
   availableModels?: BackendModel[];
   onOpenCredentials?: () => void;
@@ -30,19 +34,25 @@ interface ChatAreaProps {
 export const ChatArea: React.FC<ChatAreaProps> = ({
   currentProject,
   messages,
-  selectedModelId,
   isLoading,
+  isDataLoaded = false,
+  pendingDatabaseName,
+  availableDatabasesForPicker = [],
+  onSelectDatabase,
   onSendSuggestedPrompt,
   availableModels = [],
   onOpenCredentials,
 }) => {
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
+  const [dbPickerOpen, setDbPickerOpen] = useState(false);
 
-  const selectedModel =
-    availableModels.find((m) => m.id === selectedModelId) ||
-    AVAILABLE_MODELS.find((m) => m.id === selectedModelId) ||
-    (availableModels.length > 0 ? availableModels[0] : null);
+  // No project: header shows pending DB name (selectable)
+  const hasProject = Boolean(currentProject?.id && (currentProject.messages?.length ?? 0) > 0);
+  const headerDbName = currentProject?.title && currentProject.title !== 'Untitled'
+    ? currentProject.title
+    : pendingDatabaseName ?? 'Select a Database';
+
 
   // Auto scroll to bottom
   useEffect(() => {
@@ -82,40 +92,55 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     <div className="nirnaya-chat-main">
       {/* Chat Area Top Header */}
       <header className="chat-header">
-        <div className="chat-header-title-box">
-          <div className="chat-header-project">
-            <Database size={16} style={{ color: 'var(--accent-cyan)' }} />
-            <span>{currentProject.name}</span>
-          </div>
-          <span className="header-slash">/</span>
-          <span className="chat-header-session">Data Analytics Chat</span>
-        </div>
-
-        <div className="chat-header-actions">
-          {selectedModel ? (
-            <div className="model-pill-badge" title={`Active model: ${selectedModel.name}`}>
-              <span className="model-pill-dot"></span>
-              <span>{selectedModel.name}</span>
-            </div>
-          ) : (
+        <div className="chat-header-title-box" style={{ position: 'relative' }}>
+          {/* DB/Project name — selectable when no project yet */}
+          {!hasProject && onSelectDatabase ? (
             <button
               type="button"
-              className="model-pill-badge"
-              style={{
-                background: 'rgba(245, 158, 11, 0.08)',
-                borderColor: 'rgba(245, 158, 11, 0.3)',
-                color: '#fbbf24',
-                cursor: onOpenCredentials ? 'pointer' : 'default',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-              }}
-              onClick={onOpenCredentials}
-              title="Click to add API key"
+              className="chat-header-project"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              onClick={() => setDbPickerOpen((v) => !v)}
+              title="Change active database"
             >
-              <KeyRound size={11} />
-              <span>API Key Required</span>
+              <Database size={16} style={{ color: 'var(--accent-cyan)' }} />
+              <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{headerDbName}</span>
+              <ChevronDown size={13} style={{ color: 'var(--text-muted)', marginLeft: '2px' }} />
             </button>
+          ) : (
+            <div className="chat-header-project">
+              <Database size={16} style={{ color: 'var(--accent-cyan)' }} />
+              <span>{currentProject?.title || headerDbName}</span>
+            </div>
+          )}
+          <span className="header-slash">/</span>
+          <span className="chat-header-session">Data Analytics Chat</span>
+
+          {/* Database picker dropdown */}
+          {dbPickerOpen && availableDatabasesForPicker.length > 0 && (
+            <div style={{
+              position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 200,
+              background: '#111827', border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: '8px', padding: '6px', minWidth: '220px',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+            }}>
+              {availableDatabasesForPicker.map((db) => (
+                <button
+                  key={db.id}
+                  type="button"
+                  onClick={() => { onSelectDatabase?.(db.id); setDbPickerOpen(false); }}
+                  style={{
+                    width: '100%', padding: '8px 10px', borderRadius: '6px', textAlign: 'left',
+                    background: db.name === headerDbName ? 'rgba(99,102,241,0.15)' : 'transparent',
+                    color: 'var(--text-secondary)', fontSize: '13px',
+                    display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
+                    border: 'none',
+                  }}
+                >
+                  <Database size={13} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
+                  <span>{db.name}</span>
+                </button>
+              ))}
+            </div>
           )}
         </div>
       </header>
@@ -133,11 +158,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <p className="empty-subtext">
               Welcome to <span className="kannada-accent-pill">Nirnaya</span>. Ask complex
               business questions, inspect uploaded data files, or simulate strategic decisions
-              across <strong style={{ color: '#ffffff' }}>{currentProject.name}</strong>.
+              across <strong style={{ color: '#ffffff' }}>{currentProject?.title || 'your datasets'}</strong>.
             </p>
 
-            {/* Prompt to add API keys if none configured */}
-            {availableModels.length === 0 && (
+            {/* Prompt to add API keys if none configured — only after data is loaded */}
+            {isDataLoaded && availableModels.length === 0 && (
               <div
                 style={{
                   display: 'flex',
@@ -381,26 +406,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             );
           })
         )}
-
-        {/* Loading / Typing Indicator */}
-        {isLoading && (
-          <div className="message-row message-row-assistant">
-            <div className="message-bubble-assistant-wrap">
-              <div className="assistant-avatar">
-                <LogoEmblem size={22} />
-              </div>
-              <div className="assistant-bubble typing-indicator-box">
-                <span className="typing-dot"></span>
-                <span className="typing-dot"></span>
-                <span className="typing-dot"></span>
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: '8px' }}>
-                  Nirnaya is synthesizing decision data...
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
-
         <div ref={scrollEndRef} />
       </div>
     </div>

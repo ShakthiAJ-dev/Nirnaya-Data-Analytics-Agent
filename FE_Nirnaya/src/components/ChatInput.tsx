@@ -30,6 +30,7 @@ interface ChatInputProps {
   selectedModelId: string;
   onSelectModel: (modelId: string) => void;
   isLoading?: boolean;
+  isDataLoaded?: boolean;
   /** Live models from BE — only populated when provider keys are stored. */
   availableModels?: BackendModel[];
   /** Callback to open the LLM Credentials modal when user needs to add keys. */
@@ -41,6 +42,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   selectedModelId,
   onSelectModel,
   isLoading = false,
+  isDataLoaded = false,
   availableModels = [],
   onOpenCredentials,
 }) => {
@@ -222,7 +224,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             ref={textareaRef}
             className="chat-textarea"
             placeholder={
-              hasModels
+              !isDataLoaded || hasModels
                 ? 'Ask questions based on your data or project... (Shift+Enter for newline)'
                 : 'Add an API key in settings to start asking analytics questions...'
             }
@@ -286,7 +288,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 )}
                 <ChevronDown size={12} style={{ color: 'var(--text-muted)' }} />
               </button>
-            ) : (
+            ) : isDataLoaded ? (
               <button
                 type="button"
                 className="model-picker-btn model-picker-no-key"
@@ -305,6 +307,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   Add API Key to unlock models
                 </span>
               </button>
+            ) : (
+              <div
+                className="model-picker-btn"
+                style={{ color: 'var(--text-muted)', pointerEvents: 'none' }}
+              >
+                <Zap size={13} style={{ opacity: 0.4 }} />
+                <span style={{ opacity: 0.5 }}>Loading…</span>
+              </div>
             )}
 
             {/* Model Dropdown Menu */}
@@ -347,7 +357,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                       );
                     })}
                   </>
-                ) : (
+                ) : isDataLoaded ? (
                   <div className="model-dropdown-empty-state">
                     <KeyRound
                       size={20}
@@ -387,6 +397,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                         <span>Configure API Keys</span>
                       </button>
                     )}
+                  </div>
+                ) : (
+                  <div className="model-dropdown-empty-state" style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+                    Loading…
                   </div>
                 )}
               </div>

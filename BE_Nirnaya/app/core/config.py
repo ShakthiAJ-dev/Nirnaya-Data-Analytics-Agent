@@ -131,6 +131,33 @@ class Settings(BaseSettings):
     )
     bedrock_region: str = Field(default="us-east-1", validation_alias="BEDROCK_REGION")
     # ------------------------------------------------------------------
+    # LangGraph — Postgres checkpointer
+    # Direct PostgreSQL connection string (NOT the Supabase HTTP URL).
+    # Find under: Supabase → Settings → Database → Connection String
+    # Format: postgresql://postgres:[PASSWORD]@db.[PROJECT].supabase.co:5432/postgres
+    # Needed for interrupt() / resume (ask_user flow) + turn state persistence.
+    # ------------------------------------------------------------------
+    database_url: str = Field(default="", validation_alias="DATABASE_URL")
+
+    # ------------------------------------------------------------------
+    # Upstash QStash — delayed job scheduling (session cleanup on expiry)
+    # ------------------------------------------------------------------
+    qstash_url: str = Field(default="", validation_alias="QSTASH_URL")
+    qstash_token: str = Field(default="", validation_alias="QSTASH_TOKEN")
+    qstash_current_signing_key: str = Field(
+        default="", validation_alias="QSTASH_CURRENT_SIGNING_KEY"
+    )
+    qstash_next_signing_key: str = Field(
+        default="", validation_alias="QSTASH_NEXT_SIGNING_KEY"
+    )
+
+    # Public base URL of this API — used to build QStash callback URLs.
+    # e.g. https://my-api.onrender.com   (no trailing slash)
+    app_base_url: str = Field(
+        default="http://localhost:8000", validation_alias="APP_BASE_URL"
+    )
+
+    # ------------------------------------------------------------------
     # Pydantic-settings — reads from .env + OS env vars
     # ------------------------------------------------------------------
     model_config = SettingsConfigDict(

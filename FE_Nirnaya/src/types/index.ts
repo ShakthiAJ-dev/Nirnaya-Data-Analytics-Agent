@@ -38,23 +38,35 @@ export interface Message {
   isStreaming?: boolean;
 }
 
-export interface ChatSession {
+export interface Database {
   id: string;
-  projectId: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  messages: Message[];
-  model: string;
+  name: string;
+  schema_name: string;
+  metadata_path?: string;
+  created_at: string;
+  metadata?: any;
+}
+
+export interface DatasetMetadata {
+  name: string;
+  tableName: string;
+  rows: number;
+  columns: string[];
+  description: string;
+  useCase?: string;
+  keyNotes?: string;
+  domainTags?: string[];
 }
 
 export interface Project {
   id: string;
-  name: string;
-  description: string;
-  icon?: string;
-  datasetsCount: number;
-  createdAt: string;
+  title: string;
+  database_id?: string;
+  session_id: string;
+  created_at: string;
+  updated_at: string;
+  messages: Message[];
+  model?: string;
 }
 
 export interface LLMCredentials {

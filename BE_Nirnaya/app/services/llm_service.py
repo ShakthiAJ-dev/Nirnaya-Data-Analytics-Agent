@@ -38,13 +38,8 @@ logger = get_logger(__name__)
 
 # Model mapping dictionaries
 _BEDROCK_MODEL_MAP: dict[str, str] = {
-    "claude-3-5-sonnet": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-    "claude-3-5-sonnet-20241022": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-    "claude-3-5-haiku": "anthropic.claude-3-5-haiku-20241022-v1:0",
-    "claude-3-5-haiku-20241022": "anthropic.claude-3-5-haiku-20241022-v1:0",
-    "claude-3-7-sonnet": "anthropic.claude-3-7-sonnet-20250219-v1:0",
-    "claude-4.5-sonnet": "anthropic.claude-3-5-sonnet-20241022-v2:0",  # alias fallback
-    "claude-4.5-haiku": "anthropic.claude-3-5-haiku-20241022-v1:0",    # alias fallback
+    "claude-4.5-sonnet": "global.anthropic.claude-haiku-4-5-20251001-v1:0",  # alias fallback
+    "claude-4.5-haiku": "global.anthropic.claude-haiku-4-5-20251001-v1:0",    # alias fallback
 }
 
 _ANTHROPIC_DIRECT_MODEL_MAP: dict[str, str] = {
@@ -52,6 +47,12 @@ _ANTHROPIC_DIRECT_MODEL_MAP: dict[str, str] = {
     "claude-3-5-haiku": "claude-3-5-haiku-20241022",
     "claude-3-7-sonnet": "claude-3-7-sonnet-20250219",
 }
+
+# Cheapest models to use for lightweight utility calls (e.g. title generation)
+# These are deliberately NOT the agent model — we want speed + low cost.
+_TITLE_MODEL_BEDROCK = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+_TITLE_MODEL_ANTHROPIC_DIRECT = "claude-3-5-haiku-20241022"
+_TITLE_MODEL_OPENAI = "gpt-4o-mini"
 
 
 def _detect_provider(model: str) -> str:
@@ -120,8 +121,6 @@ class LLMService:
             raise LLMException("BEDROCK_API_KEY is not configured on the server.")
 
         aws_kwargs: dict[str, Any] = {"region_name": settings.bedrock_region}
-        if settings.bedrock_endpoint:
-            aws_kwargs["endpoint_url"] = settings.bedrock_endpoint
 
         client = boto3.client(service_name="bedrock-runtime", **aws_kwargs)
 
@@ -245,6 +244,20 @@ class LLMService:
 
             response: AIMessage = await llm.ainvoke(messages)  # type: ignore[assignment]
 
+            # ── DEBUG: log full raw response structure ────────────────────────
+            # Temporary — remove once reasoning field locations are confirmed.
+            logger.info(
+                "llm_raw_response_debug",
+                provider=actual_provider,
+                model=model,
+                content_type=type(response.content).__name__,
+                content=response.content,
+                response_metadata=getattr(response, "response_metadata", {}),
+                additional_kwargs=getattr(response, "additional_kwargs", {}),
+                usage_metadata=getattr(response, "usage_metadata", {}),
+            )
+            # ─────────────────────────────────────────────────────────────────
+
             # Flatten content when tools are not used so caller gets a consistent string
             if not tools:
                 response.content = _normalize_content(response.content)
@@ -262,3 +275,86 @@ class LLMService:
             if "rate" in err_str.lower() or "throttl" in err_str.lower() or "429" in err_str:
                 raise LLMRateLimitException(f"LLM Rate limit error: {exc}") from exc
             raise LLMException(f"LLM invocation error: {exc}") from exc
+
+    async def generate_title(
+        self,
+        user_message: str,
+        provider: str | None = None,
+    ) -> str:
+        """
+        Generate a short project title (3-6 words) from the user's first message.
+
+        Deliberately uses the cheapest available model regardless of what model
+        the caller/agent is using — this is a lightweight utility call:
+          • Bedrock  → claude-haiku-4-5
+          • Anthropic direct → claude-3-5-haiku
+          • OpenAI   → gpt-4o-mini
+
+        Returns an empty string on any failure (title is optional / non-fatal).
+        """
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        system_prompt = (
+            "Generate a concise project title of 3 to 6 words in title case. "
+            "No punctuation, no explanation, no quotes. "
+            "Output ONLY the title and nothing else."
+        )
+
+        actual_provider = provider or _detect_provider("")  # default openai, but overridden below
+
+        # Resolve provider from session if not supplied
+        if not provider:
+            # Try to infer from available keys
+            if settings.claude_provider in ("bedrock", "anthropic"):
+                actual_provider = "anthropic"
+            else:
+                actual_provider = "openai"
+
+        # Pick the cheapest model for this provider
+        if actual_provider == "anthropic":
+            if settings.claude_provider == "bedrock":
+                title_model_id = _TITLE_MODEL_BEDROCK
+                boto3_client = self._get_bedrock_boto3_client()
+                llm: BaseChatModel = ChatBedrockConverse(
+                    model=title_model_id,
+                    client=boto3_client,
+                    max_tokens=20,
+                    temperature=0.0,
+                )
+            else:
+                api_key = self._direct_api_key
+                if not api_key and self.session_service and self.session_id:
+                    _, api_key = await self.session_service.get_api_key(self.session_id, "anthropic")
+                if not api_key:
+                    return ""
+                llm = ChatAnthropic(
+                    model=_TITLE_MODEL_ANTHROPIC_DIRECT,
+                    api_key=api_key,
+                    max_tokens=20,
+                    temperature=0.0,
+                )
+        else:
+            api_key = self._direct_api_key
+            if not api_key and self.session_service and self.session_id:
+                _, api_key = await self.session_service.get_api_key(self.session_id, "openai")
+            if not api_key:
+                return ""
+            llm = ChatOpenAI(
+                model=_TITLE_MODEL_OPENAI,
+                api_key=api_key,
+                max_tokens=20,
+                temperature=0.0,
+            )
+
+        try:
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_message[:300]),
+            ]
+            response = await llm.ainvoke(messages)  # type: ignore[assignment]
+            title = _normalize_content(response.content).strip().strip('"\'')
+            logger.info("generate_title_success", provider=actual_provider, title=title)
+            return title
+        except Exception as exc:
+            logger.warning("generate_title_failed", provider=actual_provider, error=str(exc))
+            return ""

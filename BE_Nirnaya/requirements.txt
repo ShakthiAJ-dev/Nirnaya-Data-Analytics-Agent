@@ -33,6 +33,14 @@ langchain-openai>=0.2.0
 langchain-anthropic>=0.3.0
 langchain-aws>=0.2.0
 
+# ── LangGraph (orchestrator + worker graphs, interrupt/resume checkpointing) ───
+langgraph>=0.2.0
+langgraph-checkpoint-postgres>=2.0.0
+
+# ── Psycopg3 async (required by langgraph-checkpoint-postgres) ────────────────
+psycopg[binary]>=3.1.0
+psycopg-pool>=3.1.0
+
 # ── HTTP client (shared dep — let pip resolve the right version) ─────────────
 httpx>=0.23.0,<0.28
 
@@ -42,3 +50,4 @@ openpyxl>=3.1.0
 pyarrow>=14.0.0
 python-multipart>=0.0.9
 
+qstash>=2.0.0
