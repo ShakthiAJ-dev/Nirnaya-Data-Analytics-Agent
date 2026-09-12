@@ -1,8 +1,24 @@
 import { api } from './apiClient';
-import type { Project } from '../types';
+import type { Project, Artifact, StepEvent } from '../types';
 
 export interface CreateProjectPayload {
   database_id?: string;
+}
+
+export interface HistoricalArtifact extends Artifact {
+  artifact_id: string;
+}
+
+export interface HistoricalTurn {
+  turn_id: string;
+  user_message: string;
+  markdown: string;
+  artifacts: HistoricalArtifact[];
+  steps: StepEvent[];
+  follow_up_questions: string[];
+  execution_time_ms?: number;
+  seq?: number;
+  created_at: string;
 }
 
 export const projectService = {
@@ -28,5 +44,14 @@ export const projectService = {
 
   deleteProject: async (projectId: string): Promise<void> => {
     await api.delete(`/projects/${projectId}`);
+  },
+
+  getProjectMessages: async (projectId: string): Promise<HistoricalTurn[]> => {
+    try {
+      const res = await api.get<{ success: boolean; data: { project_id: string; turns: HistoricalTurn[]; total: number } }>(`/projects/${projectId}/messages`);
+      return res.data?.turns ?? [];
+    } catch {
+      return [];
+    }
   },
 };

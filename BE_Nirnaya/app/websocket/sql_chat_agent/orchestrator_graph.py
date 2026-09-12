@@ -97,6 +97,14 @@ async def _get_ws(config: RunnableConfig):
     )
 
 
+def _elapsed_ms(config: RunnableConfig) -> int:
+    """Return milliseconds elapsed since the turn start (monotonic clock)."""
+    import time
+    cfg = config.get("configurable", {})
+    start = cfg.get("turn_start_ms", 0)
+    return int(time.monotonic() * 1000) - start if start else 0
+
+
 def _model(config: RunnableConfig) -> tuple[str, str | None]:
     """Return (model_name, provider) from config. Falls back to default."""
     cfg = config.get("configurable", {})
@@ -794,6 +802,7 @@ async def direct_response_node(state: OrchestratorState, config: RunnableConfig)
         markdown=markdown,
         artifacts=[],           # direct response has no artifacts
         follow_up_questions=follow_ups,
+        execution_time_ms=_elapsed_ms(config),
     ))
 
     return {
@@ -1091,6 +1100,7 @@ async def synthesize_final_node(state: OrchestratorState, config: RunnableConfig
         markdown=markdown,
         artifacts=artifacts_payload,
         follow_up_questions=follow_ups,
+        execution_time_ms=_elapsed_ms(config),
     ))
 
     return {

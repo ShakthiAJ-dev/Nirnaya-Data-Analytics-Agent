@@ -2,8 +2,6 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { ChatInput } from './components/ChatInput';
-import { StepsPanel } from './components/StepsPanel';
-import { ArtifactsPanel } from './components/ArtifactsPanel';
 import { CredentialsModal } from './components/CredentialsModal';
 import { NewProjectModal } from './components/NewProjectModal';
 import { NewDatabaseModal } from './components/NewDatabaseModal';
@@ -18,6 +16,7 @@ import type {
   StepEvent,
   FinalEvent,
   WSAckFrame,
+  AskUserEvent,
 } from './types';
 import { DEFAULT_MODEL_ID } from './constants/models';
 import { useSession } from './hooks/useSession';
@@ -31,14 +30,6 @@ const STORAGE_KEYS = {
   SELECTED_MODEL: 'nirnaya_selected_model_v1',
   DEMO_PROMPTED: 'nirnaya_demo_prompted',
 };
-
-function buildChatPayload(projectId: string, databaseId: string | undefined, modelId: string) {
-  return {
-    project_id: projectId,
-    database_id: databaseId ?? null,
-    model_id: modelId,
-  };
-}
 
 function App() {
   const { sessionStatus, submitKey, wsClient, onWSMessage } = useSession();
@@ -62,6 +53,8 @@ function App() {
   const streamingRef = useRef<Record<string, { projectId: string; placeholderId: string }>>({});
   const currentTurnContextRef = useRef<{ projectId: string; placeholderId: string } | null>(null);
   const demoPromptedRef = useRef(false);
+  const lastSeqRef = useRef<number>(-1);
+  const activeTurnIdRef = useRef<string | null>(null);
 
   const [selectedModelId, setSelectedModelId] = useState<string>(() => {
     return localStorage.getItem(STORAGE_KEYS.SELECTED_MODEL) || DEFAULT_MODEL_ID;
@@ -78,13 +71,11 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
 
   const {
-    steps,
     artifacts,
     finalMarkdown,
     isProcessing,
     turnId,
     startTime,
-    endTime,
     handleAckFrame,
     handleStepEvent,
     handleFinalEvent,
@@ -92,7 +83,7 @@ function App() {
     reset: resetStepTracking,
   } = useStepTracking();
 
-  console.log('[App] useStepTracking result:', { stepsCount: steps.length, artifactsCount: artifacts.length, isProcessing });
+  console.log('[App] useStepTracking result:', { artifactsCount: artifacts.length, isProcessing });
 
   const currentProject = projects.find((p) => p.id === currentProjectId) ?? null;
   const activeDatabase = currentProject?.database_id
@@ -105,35 +96,20 @@ function App() {
   useEffect(() => {
     const unsub = onWSMessage((frame) => {
       console.log('[App] WS frame received:', frame.type, frame);
-      // Handle new event types for steps/artifacts
+
       if (frame.type === 'ack') {
         const ackFrame = frame as WSAckFrame;
-        console.log('[App] ACK frame:', ackFrame);
+        activeTurnIdRef.current = ackFrame.turn_id;
+        lastSeqRef.current = -1;
         handleAckFrame(ackFrame);
         return;
       }
 
       if (frame.type === 'step') {
         const stepEvent = frame as StepEvent;
-        console.log('[App] Step event:', stepEvent);
+        lastSeqRef.current = Math.max(lastSeqRef.current, stepEvent.seq);
         handleStepEvent(stepEvent);
-        return;
-      }
-
-      if (frame.type === 'final') {
-        const finalEvent = frame as FinalEvent;
-        // Update project title if available
-        if (finalEvent.markdown && currentProject) {
-          setProjects((prev) =>
-            prev.map((p) =>
-              p.id === currentProject.id
-                ? { ...p, title: finalEvent.markdown.split('\n')[0].slice(0, 50) || p.title }
-                : p
-            )
-          );
-        }
-        // Update placeholder message with final markdown + artifacts
-        if (currentTurnContextRef.current && finalEvent.markdown) {
+        if (currentTurnContextRef.current) {
           const { projectId, placeholderId } = currentTurnContextRef.current;
           setProjects((prev) =>
             prev.map((p) =>
@@ -142,7 +118,84 @@ function App() {
                     ...p,
                     messages: (p.messages || []).map((m) =>
                       m.id === placeholderId
-                        ? { ...m, content: finalEvent.markdown, isStreaming: false }
+                        ? {
+                            ...m,
+                            steps: [
+                              ...(m.steps || []).filter((s) => s.seq !== stepEvent.seq),
+                              stepEvent,
+                            ].sort((a, b) => a.seq - b.seq),
+                          }
+                        : m
+                    ),
+                  }
+                : p
+            )
+          );
+        }
+        return;
+      }
+
+      if (frame.type === 'ask_user') {
+        const askEvent = frame as unknown as AskUserEvent;
+        lastSeqRef.current = Math.max(lastSeqRef.current, askEvent.seq);
+        if (currentTurnContextRef.current) {
+          const { projectId, placeholderId } = currentTurnContextRef.current;
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === projectId
+                ? {
+                    ...p,
+                    messages: (p.messages || []).map((m) =>
+                      m.id === placeholderId ? { ...m, askUser: askEvent } : m
+                    ),
+                  }
+                : p
+            )
+          );
+        }
+        return;
+      }
+
+      if (frame.type === 'project_title_updated') {
+        const newTitle = frame.title as string;
+        const projectId = frame.project_id as string;
+        if (newTitle && projectId) {
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === projectId && (!p.title || p.title === 'Untitled')
+                ? { ...p, title: newTitle }
+                : p
+            )
+          );
+        }
+        return;
+      }
+
+      if (frame.type === 'final') {
+        const finalEvent = frame as FinalEvent;
+        lastSeqRef.current = Math.max(lastSeqRef.current, finalEvent.seq ?? -1);
+        activeTurnIdRef.current = null;
+        const thinkingSeconds = startTime ? Math.round((Date.now() - startTime) / 1000) : 0;
+        const freshArtifacts = (finalEvent.artifacts || []).filter((a) => a.status === 'fresh');
+        if (currentTurnContextRef.current) {
+          const { projectId, placeholderId } = currentTurnContextRef.current;
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === projectId
+                ? {
+                    ...p,
+                    messages: (p.messages || []).map((m) =>
+                      m.id === placeholderId
+                        ? {
+                            ...m,
+                            content: finalEvent.markdown || m.content,
+                            isStreaming: false,
+                            thinkingSeconds,
+                            executionTimeMs: finalEvent.execution_time_ms,
+                            artifacts: freshArtifacts,
+                            followUpQuestions: finalEvent.follow_up_questions || [],
+                            askUser: undefined,
+                          }
                         : m
                     ),
                   }
@@ -157,9 +210,9 @@ function App() {
       }
 
       if (frame.type === 'error') {
-        const turnId = frame.turn_id as string;
-        const message = frame.message || 'Unknown error';
-        handleErrorEvent(turnId, message);
+        const errTurnId = frame.turn_id as string;
+        const message = (frame.message as string) || 'Unknown error';
+        handleErrorEvent(errTurnId, message);
         setIsLoading(false);
         return;
       }
@@ -212,7 +265,7 @@ function App() {
       }
     });
     return unsub;
-  }, [onWSMessage, currentProject, handleAckFrame, handleStepEvent, handleFinalEvent, handleErrorEvent]);
+  }, [onWSMessage, currentProject, handleAckFrame, handleStepEvent, handleFinalEvent, handleErrorEvent, startTime]);
 
   // ---------------------------------------------------------------------------
   // Fetch projects + databases once session is ready
@@ -294,10 +347,64 @@ function App() {
   // ---------------------------------------------------------------------------
   // Handlers: Projects
   // ---------------------------------------------------------------------------
+  const loadProjectHistory = useCallback(async (projectId: string) => {
+    const proj = projects.find((p) => p.id === projectId);
+    if (!proj || (proj.messages && proj.messages.length > 0)) return;
+    const turns = await projectService.getProjectMessages(projectId);
+    if (!turns || turns.length === 0) return;
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const historicalMessages: Message[] = turns.flatMap((turn) => {
+      const ts = turn.created_at
+        ? new Date(turn.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : timeStr;
+      const user: Message = {
+        id: `hist-user-${turn.turn_id}`,
+        role: 'user',
+        content: turn.user_message,
+        timestamp: ts,
+      };
+      const assistant: Message = {
+        id: `hist-asst-${turn.turn_id}`,
+        role: 'assistant',
+        content: turn.markdown,
+        timestamp: ts,
+        executionTimeMs: turn.execution_time_ms,
+        thinkingSeconds: turn.execution_time_ms ? Math.round(turn.execution_time_ms / 1000) : undefined,
+        steps: turn.steps || [],
+        artifacts: (turn.artifacts || []).filter((a) => a.status === 'fresh'),
+        followUpQuestions: turn.follow_up_questions || [],
+      };
+      return [user, assistant];
+    });
+    setProjects((prev) =>
+      prev.map((p) =>
+        p.id === projectId && (!p.messages || p.messages.length === 0)
+          ? { ...p, messages: historicalMessages }
+          : p
+      )
+    );
+  }, [projects]);
+
+  const handleAskUserResponse = useCallback((turnId: string, answer: string, modelId: string) => {
+    if (!wsClient?.isReady) return;
+    wsClient.sendAskUserResponse(turnId, answer, modelId);
+    // Clear the askUser from the message
+    setProjects((prev) =>
+      prev.map((p) => ({
+        ...p,
+        messages: (p.messages || []).map((m) =>
+          m.askUser?.turn_id === turnId ? { ...m, askUser: undefined } : m
+        ),
+      }))
+    );
+  }, [wsClient]);
+
   const handleSelectProject = (projectId: string) => {
     setCurrentProjectId(projectId);
     const proj = projects.find((p) => p.id === projectId);
     if (proj?.database_id) setPendingDatabaseId(proj.database_id);
+    loadProjectHistory(projectId);
   };
 
   const handleSelectDatabase = async (dbId: string) => {
@@ -484,10 +591,11 @@ function App() {
     const placeholder: Message = {
       id: placeholderId,
       role: 'assistant',
-      content: finalMarkdown || '',
+      content: '',
       timestamp: timeStr,
       model: modelId,
       isStreaming: false,
+      turnStartTime: Date.now(),
     };
 
     setProjects((prev) =>
@@ -606,10 +714,8 @@ function App() {
                 onSendSuggestedPrompt={(suggested) => handleSendMessage(suggested, [], selectedModelId)}
                 availableModels={availableModels}
                 onOpenCredentials={() => setIsCredentialsModalOpen(true)}
+                onAskUserResponse={handleAskUserResponse}
               />
-            </div>
-            <div style={{ minHeight: '1px', maxHeight: '250px', overflow: 'auto', borderTop: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
-              <StepsPanel steps={steps} isLoading={isProcessing} startTime={startTime} endTime={endTime} />
             </div>
           </div>
 
@@ -623,13 +729,6 @@ function App() {
             onOpenCredentials={() => setIsCredentialsModalOpen(true)}
           />
         </div>
-
-        {/* Right: Artifacts */}
-        {artifacts.length > 0 && (
-          <div style={{ width: '400px', borderLeft: '1px solid var(--border-color)', overflow: 'hidden' }}>
-            <ArtifactsPanel artifacts={artifacts} />
-          </div>
-        )}
       </div>
 
       <CredentialsModal

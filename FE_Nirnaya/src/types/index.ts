@@ -24,6 +24,17 @@ export interface TableData {
   rows: (string | number)[][];
 }
 
+export interface AskUserEvent {
+  type: 'ask_user';
+  chat_id: string;
+  turn_id: string;
+  seq: number;
+  question: string;
+  mode: 'mcq' | 'free_text';
+  options: string[] | null;
+  ts: string;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -36,6 +47,13 @@ export interface Message {
   insights?: string[];
   suggestions?: string[];
   isStreaming?: boolean;
+  steps?: StepEvent[];
+  thinkingSeconds?: number;
+  executionTimeMs?: number;
+  artifacts?: Artifact[];
+  followUpQuestions?: string[];
+  askUser?: AskUserEvent;
+  turnStartTime?: number;
 }
 
 export interface Database {
@@ -115,6 +133,7 @@ export interface FinalEvent {
   markdown: string;
   artifacts: Artifact[];
   follow_up_questions: string[];
+  execution_time_ms?: number;
   ts: string;
 }
 

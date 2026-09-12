@@ -33,8 +33,6 @@ const WS_BASE_URL = import.meta.env.VITE_WS_BASE_URL ?? 'ws://localhost:8000';
 
 export type WSFrameType =
   | 'auth'
-  | 'ping'
-  | 'pong'
   | 'ack'
   | 'step'
   | 'final'
@@ -43,7 +41,8 @@ export type WSFrameType =
   | 'cancel'
   | 'stream'
   | 'complete'
-  | 'chat_message';
+  | 'chat_message'
+  | 'project_title_updated';
 
 export interface WSFrame {
   type: WSFrameType;
@@ -79,14 +78,13 @@ export class NirnayaWSClient {
   private ws: WebSocket | null = null;
   private token: string;
   private callbacks: WSClientCallbacks;
-  private pingInterval: ReturnType<typeof setInterval> | null = null;
   private authAcknowledged = false;
-  private pendingPingIds: Set<string> = new Set();
 
   /** Number of automatic reconnect attempts remaining */
   private reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 3;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(token: string, callbacks: WSClientCallbacks = {}) {
     this.token = token;
@@ -118,8 +116,8 @@ export class NirnayaWSClient {
           if (!this.authAcknowledged) {
             console.debug('[ws] Auth assumed successful (no close received)');
             this.authAcknowledged = true;
-            this._startPing();
             this.callbacks.onAuthSuccess?.();
+            this.pingInterval = setInterval(() => this.sendPing(), 30_000);
             resolve();
           }
         }, 1500);
@@ -147,20 +145,12 @@ export class NirnayaWSClient {
           return;
         }
 
-        // Pong — remove from pending set
-        if (frame.type === 'pong') {
-          this.pendingPingIds.delete(frame.transactionId);
-          console.debug('[ws] Pong received for tx:', frame.transactionId);
-          return;
-        }
-
         this.callbacks.onMessage?.(frame);
       };
 
       // ── onclose ───────────────────────────────────────────────────
       this.ws.onclose = (ev) => {
         console.debug(`[ws] Closed (code=${ev.code}): ${ev.reason}`);
-        this._stopPing();
         this.callbacks.onClose?.(ev.code, ev.reason);
 
         // Auto-reconnect on abnormal close (not auth failures, not manual)
@@ -186,7 +176,10 @@ export class NirnayaWSClient {
   /** Gracefully close the connection. */
   disconnect(): void {
     this._clearReconnect();
-    this._stopPing();
+    if (this.pingInterval !== null) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
     if (this.ws) {
       this.ws.close(1000, 'Client disconnect');
       this.ws = null;
@@ -215,6 +208,32 @@ export class NirnayaWSClient {
   /** Cancel an in-flight transaction. */
   cancelTransaction(transactionId: string): void {
     this._sendFrame('cancel', transactionId, '');
+  }
+
+  /** Respond to an ask_user interrupt. */
+  sendAskUserResponse(turnId: string, answer: string, modelId: string): void {
+    this._send({
+      requestType: 'ask_user_response',
+      transactionId: this._genTxId(),
+      turn_id: turnId,
+      answer,
+      model: modelId,
+    });
+  }
+
+  /** Resume a dropped turn from the last known seq. */
+  sendResume(turnId: string, lastSeq: number): void {
+    this._send({
+      requestType: 'resume',
+      transactionId: this._genTxId(),
+      turn_id: turnId,
+      last_seq: lastSeq,
+    });
+  }
+
+  /** Send a keepalive ping to slide session TTL. */
+  sendPing(): void {
+    this._send({ requestType: 'ping', transactionId: this._genTxId() });
   }
 
   /** Check if the socket is open and authenticated. */
@@ -251,23 +270,6 @@ export class NirnayaWSClient {
       timestamp: Math.floor(Date.now() / 1000),
       ...extra,
     });
-  }
-
-  private _startPing(): void {
-    this.pingInterval = setInterval(() => {
-      if (!this.isReady) return;
-      const txId = this._genTxId('ping');
-      this.pendingPingIds.add(txId);
-      this._sendFrame('ping', txId, '');
-      console.debug('[ws] Ping sent tx:', txId);
-    }, 30_000); // every 30s — keeps Redis TTL sliding
-  }
-
-  private _stopPing(): void {
-    if (this.pingInterval !== null) {
-      clearInterval(this.pingInterval);
-      this.pingInterval = null;
-    }
   }
 
   private _scheduleReconnect(): void {

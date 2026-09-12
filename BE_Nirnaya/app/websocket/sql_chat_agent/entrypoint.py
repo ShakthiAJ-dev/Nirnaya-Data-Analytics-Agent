@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine
@@ -82,14 +83,31 @@ def make_ws_sender(
     ws_send_raw: Callable[[str], Coroutine],
     redis_service: RedisService,
     turn_id: str,
+    steps_log: list[dict] | None = None,
 ) -> Callable[[dict], Coroutine]:
     """
     Wraps the raw WS send function:
     - Serialises event dict to JSON
     - Appends to Redis stream for replay on reconnect (TTL: 30 min)
+    - If steps_log is provided, silently accumulates every `step` event
+      (compact form) so the caller can persist them to DB after the turn.
     - Swallows send errors (client may have disconnected)
     """
     async def _send(event: dict) -> None:
+        # Accumulate step events for DB persistence (only the fields FE needs)
+        if steps_log is not None and event.get("type") == "step":
+            steps_log.append({
+                "seq":         event.get("seq"),
+                "name":        event.get("name"),
+                "status":      event.get("status"),
+                "title":       event.get("title"),
+                "detail":      event.get("detail"),
+                "reasoning":   event.get("reasoning", ""),
+                "artifact_id": event.get("artifact_id"),
+                "worker_id":   event.get("worker_id"),
+                "ts":          event.get("ts"),
+            })
+
         payload = json.dumps(event)
         try:
             key = stream_key(turn_id)
@@ -272,10 +290,12 @@ async def handle_chat_agent(
 
     chat_svc = ChatService(session_id, supabase_service)
     seq_counter = SeqCounter()
-    ws_send = make_ws_sender(ws_send_raw, redis_service, turn_id)
+    steps_log: list[dict] = []  # collects every step event for DB persistence
+    ws_send = make_ws_sender(ws_send_raw, redis_service, turn_id, steps_log)
+    turn_start_ms: int = int(time.monotonic() * 1000)  # monotonic clock, milliseconds
 
     # chat_id = turn_id: each turn is its own checkpointer thread.
-    # The project_id groups all turns for the same conversation.
+    # The project_id groups all turns for context/history.
     chat_id = turn_id
 
     # ── 1. Resolve project → database_id ──────────────────────────────
@@ -415,6 +435,8 @@ async def handle_chat_agent(
     # ── 10. Build LangGraph config ────────────────────────────────────────────────
     # thread_id = turn_id (= chat_id) so each turn is independently checkpointable.
     # turn_message_id is passed so workers can link artifacts to the right row.
+    # turn_start_ms is the monotonic clock in ms at turn creation — nodes use this
+    # to compute execution_time_ms for the final WS event and DB update.
     thread_config: RunnableConfig = {
         "configurable": {
             "thread_id":        turn_id,           # checkpointer key = chat_messages.id
@@ -430,6 +452,7 @@ async def handle_chat_agent(
             "effective_db_id":  database_id,
             "project_id":       project_id,
             "turn_message_id":  turn_id,           # = chat_messages.id for artifact FK
+            "turn_start_ms":    turn_start_ms,     # monotonic ms — for execution_time_ms
         }
     }
 
@@ -459,6 +482,7 @@ async def handle_chat_agent(
         return
 
     # ── 11. Fill in turn output (answer side of the single row) ──────
+    elapsed_ms: int = int(time.monotonic() * 1000) - turn_start_ms
     try:
         await chat_svc.update_turn_output(
             turn_id=turn_id,
@@ -466,6 +490,8 @@ async def handle_chat_agent(
                 "markdown":            final_markdown,
                 "artifact_ids":        artifact_ids,
                 "follow_up_questions": follow_up_questions,
+                "execution_time_ms":   elapsed_ms,
+                "steps":               steps_log,   # ordered list of step events
             },
         )
     except Exception as exc:
