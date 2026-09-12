@@ -282,6 +282,13 @@ async def handle_chat_agent(
     try:
         project_svc = ProjectService(session_id, supabase_service)
         project_record = await project_svc.get(project_id)
+        if not project_record:
+            await ws_send(make_error(
+                chat_id=chat_id, turn_id=turn_id,
+                seq=await seq_counter.next(),
+                message=f"Project '{project_id}' not found or not accessible.",
+            ))
+            return
         database_id: str = project_record.get("database_id", "")
     except Exception as exc:
         await ws_send(make_error(
@@ -321,7 +328,15 @@ async def handle_chat_agent(
             message=f"Database '{database_id}' not found or not accessible.",
         ))
         return
-    schema_name: str = db_record["schema_name"]
+
+    schema_name = db_record.get("schema_name")
+    if not schema_name:
+        await ws_send(make_error(
+            chat_id=chat_id, turn_id=turn_id,
+            seq=await seq_counter.next(),
+            message=f"Database record corrupted: missing schema_name.",
+        ))
+        return
 
     # ── 5. Load metadata ──────────────────────────────────────────────
     full_metadata = await _load_metadata_from_storage(session_id, database_id, supabase_service)

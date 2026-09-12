@@ -45,10 +45,11 @@ def _supabase(request: Request):
 @router.post(
     "/create",
     status_code=status.HTTP_201_CREATED,
-    summary="Create demo project",
+    summary="Create demo database",
     description=(
-        "Creates a Music E-commerce database with pre-loaded data and a linked project "
-        "for the calling session. Idempotent — returns existing demo if already created."
+        "Creates a Music E-commerce database with pre-loaded data "
+        "for the calling session. Idempotent — returns existing demo if already created. "
+        "Project and chat are created when user sends their first question."
     ),
 )
 async def create_demo_project(request: Request, redis: RedisDep) -> JSONResponse:
@@ -58,17 +59,12 @@ async def create_demo_project(request: Request, redis: RedisDep) -> JSONResponse
     db_service = DatabaseService(session_id, supabase)
     db = await db_service.create_demo_database()
 
-    project_service = ProjectService(session_id, supabase)
-    project = await project_service.create(database_id=db["id"])
-
-    logger.info("demo_project_created", session_id=session_id, database_id=db["id"], project_id=project["id"])
+    logger.info("demo_database_created", session_id=session_id, database_id=db["id"])
 
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
         content={
-            "project_id": project["id"],
             "database_id": db["id"],
-            "title": project.get("title", "Untitled"),
             "database_name": db["name"],
             "schema_name": db["schema_name"],
             "metadata_path": db.get("metadata_path"),

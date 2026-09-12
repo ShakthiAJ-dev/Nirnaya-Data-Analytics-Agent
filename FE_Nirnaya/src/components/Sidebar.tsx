@@ -30,6 +30,7 @@ interface SidebarProps {
   onUploadToDatabase: (databaseId: string) => void;
   onOpenCredentials: () => void;
   onAddDemo: () => void;
+  onTableDeleted?: () => void; // callback to refresh database list when table is deleted
 }
 
 interface ModalState {
@@ -54,6 +55,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onUploadToDatabase,
   onOpenCredentials,
   onAddDemo,
+  onTableDeleted,
 }) => {
   const [dbHovered, setDbHovered] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState | null>(null);
@@ -253,6 +255,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           databaseId={modal.databaseId}
           databaseName={modal.databaseName}
           metadata={modal.metadata}
+          onTableDeleted={onTableDeleted}
         />
       )}
     </aside>

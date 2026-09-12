@@ -2,20 +2,27 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { ChatInput } from './components/ChatInput';
+import { StepsPanel } from './components/StepsPanel';
+import { ArtifactsPanel } from './components/ArtifactsPanel';
 import { CredentialsModal } from './components/CredentialsModal';
 import { NewProjectModal } from './components/NewProjectModal';
 import { NewDatabaseModal } from './components/NewDatabaseModal';
 import { DemoInitModal } from './components/DemoInitModal';
+import { DeleteDatabaseModal } from './components/DeleteDatabaseModal';
 import type {
   Project,
   Database,
   Message,
   FileAttachment,
   LLMCredentials,
+  StepEvent,
+  FinalEvent,
+  WSAckFrame,
 } from './types';
 import { DEFAULT_MODEL_ID } from './constants/models';
 import { useSession } from './hooks/useSession';
 import { useModels } from './hooks/useModels';
+import { useStepTracking } from './hooks/useStepTracking';
 import { projectService } from './services/projectService';
 import { databaseService } from './services/databaseService';
 
@@ -48,10 +55,12 @@ function App() {
   const [isNewDatabaseModalOpen, setIsNewDatabaseModalOpen] = useState(false);
   const [isCredentialsModalOpen, setIsCredentialsModalOpen] = useState(false);
   const [isDemoModalOpen, setIsDemoModalOpen] = useState(false);
+  const [deleteDatabaseId, setDeleteDatabaseId] = useState<string | null>(null);
 
   const [uploadTargetDbId, setUploadTargetDbId] = useState<string | null>(null);
   const sidebarUploadRef = useRef<HTMLInputElement | null>(null);
   const streamingRef = useRef<Record<string, { projectId: string; placeholderId: string }>>({});
+  const currentTurnContextRef = useRef<{ projectId: string; placeholderId: string } | null>(null);
   const demoPromptedRef = useRef(false);
 
   const [selectedModelId, setSelectedModelId] = useState<string>(() => {
@@ -68,6 +77,23 @@ function App() {
 
   const [isLoading, setIsLoading] = useState(false);
 
+  const {
+    steps,
+    artifacts,
+    finalMarkdown,
+    isProcessing,
+    turnId,
+    startTime,
+    endTime,
+    handleAckFrame,
+    handleStepEvent,
+    handleFinalEvent,
+    handleErrorEvent,
+    reset: resetStepTracking,
+  } = useStepTracking();
+
+  console.log('[App] useStepTracking result:', { stepsCount: steps.length, artifactsCount: artifacts.length, isProcessing });
+
   const currentProject = projects.find((p) => p.id === currentProjectId) ?? null;
   const activeDatabase = currentProject?.database_id
     ? databases.find((d) => d.id === currentProject.database_id)
@@ -78,7 +104,68 @@ function App() {
   // ---------------------------------------------------------------------------
   useEffect(() => {
     const unsub = onWSMessage((frame) => {
-      const entry = streamingRef.current[frame.transactionId];
+      console.log('[App] WS frame received:', frame.type, frame);
+      // Handle new event types for steps/artifacts
+      if (frame.type === 'ack') {
+        const ackFrame = frame as WSAckFrame;
+        console.log('[App] ACK frame:', ackFrame);
+        handleAckFrame(ackFrame);
+        return;
+      }
+
+      if (frame.type === 'step') {
+        const stepEvent = frame as StepEvent;
+        console.log('[App] Step event:', stepEvent);
+        handleStepEvent(stepEvent);
+        return;
+      }
+
+      if (frame.type === 'final') {
+        const finalEvent = frame as FinalEvent;
+        // Update project title if available
+        if (finalEvent.markdown && currentProject) {
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === currentProject.id
+                ? { ...p, title: finalEvent.markdown.split('\n')[0].slice(0, 50) || p.title }
+                : p
+            )
+          );
+        }
+        // Update placeholder message with final markdown + artifacts
+        if (currentTurnContextRef.current && finalEvent.markdown) {
+          const { projectId, placeholderId } = currentTurnContextRef.current;
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === projectId
+                ? {
+                    ...p,
+                    messages: (p.messages || []).map((m) =>
+                      m.id === placeholderId
+                        ? { ...m, content: finalEvent.markdown, isStreaming: false }
+                        : m
+                    ),
+                  }
+                : p
+            )
+          );
+          currentTurnContextRef.current = null;
+        }
+        handleFinalEvent(finalEvent);
+        setIsLoading(false);
+        return;
+      }
+
+      if (frame.type === 'error') {
+        const turnId = frame.turn_id as string;
+        const message = frame.message || 'Unknown error';
+        handleErrorEvent(turnId, message);
+        setIsLoading(false);
+        return;
+      }
+
+      // Legacy stream handling (backward compat)
+      const entry = streamingRef.current[frame.transactionId!];
       if (!entry) return;
       const { projectId, placeholderId } = entry;
 
@@ -99,7 +186,7 @@ function App() {
         );
       }
 
-      if (frame.type === 'complete' || frame.type === 'error') {
+      if (frame.type === 'complete') {
         setProjects((prev) =>
           prev.map((p) =>
             p.id === projectId
@@ -109,12 +196,10 @@ function App() {
                     m.id === placeholderId
                       ? {
                           ...m,
-                          content: m.content || (frame.type === 'error' ? '*(Agent error)*' : ''),
+                          content: m.content || '',
                           isStreaming: false,
                           sqlQuery: (frame as any).sql_query,
                           tableData: (frame as any).table_data,
-                          insights: (frame as any).insights,
-                          suggestions: (frame as any).suggestions,
                         }
                       : m
                   ),
@@ -122,12 +207,12 @@ function App() {
               : p
           )
         );
-        delete streamingRef.current[frame.transactionId];
+        delete streamingRef.current[frame.transactionId!];
         setIsLoading(false);
       }
     });
     return unsub;
-  }, [onWSMessage]);
+  }, [onWSMessage, currentProject, handleAckFrame, handleStepEvent, handleFinalEvent, handleErrorEvent]);
 
   // ---------------------------------------------------------------------------
   // Fetch projects + databases once session is ready
@@ -148,6 +233,9 @@ function App() {
       setDatabases(dbs);
 
       setCurrentProjectId((cur) => cur ?? projs[0]?.id ?? null);
+
+      // Auto-select first database if no project is selected yet
+      setPendingDatabaseId((cur) => cur ?? dbs[0]?.id ?? null);
 
       // Show demo init popup on first load if no databases exist
       if (dbs.length === 0 && !demoPromptedRef.current && !sessionStorage.getItem(STORAGE_KEYS.DEMO_PROMPTED)) {
@@ -212,8 +300,45 @@ function App() {
     if (proj?.database_id) setPendingDatabaseId(proj.database_id);
   };
 
-  const handleSelectDatabase = (dbId: string) => {
-    setPendingDatabaseId(dbId);
+  const handleSelectDatabase = async (dbId: string) => {
+    // Early return if already on this database
+    if (activeDatabase?.id === dbId) {
+      return;
+    }
+
+    // Prevent switching during message processing
+    if (isLoading) {
+      console.warn('[App] Cannot switch database while message is processing');
+      return;
+    }
+
+    // Check if current project has messages (user has invested work)
+    const hasActiveProjectWithMessages =
+      currentProject &&
+      currentProject.messages &&
+      currentProject.messages.length > 0;
+
+    if (hasActiveProjectWithMessages) {
+      // Create new blank project linked to the new database
+      try {
+        const newProject = await projectService.createProject({
+          database_id: dbId,
+        });
+
+        // Add new project to list (at beginning) and switch to it
+        setProjects((prev) => [{ ...newProject, messages: [] }, ...prev]);
+        setCurrentProjectId(newProject.id);
+        setPendingDatabaseId(dbId);
+      } catch (err) {
+        console.error('[App] Failed to create project on database switch:', err);
+        // Fallback: just update pending database
+        setPendingDatabaseId(dbId);
+      }
+    } else {
+      // No active project or empty project - just update pending database
+      // When user sends first message, it will use this database
+      setPendingDatabaseId(dbId);
+    }
   };
 
   const handleCreateProject = async (databaseId?: string) => {
@@ -242,13 +367,23 @@ function App() {
   const handleDatabaseCreated = async () => {
     const dbs = await databaseService.getDatabases();
     setDatabases(dbs);
+    // Auto-select the first/newly added database
+    if (dbs.length > 0) {
+      setPendingDatabaseId(dbs[0].id);
+    }
   };
 
   const handleDeleteDatabase = async (databaseId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    setDeleteDatabaseId(databaseId);
+  };
+
+  const handleConfirmDeleteDatabase = async () => {
+    if (!deleteDatabaseId) return;
     try {
-      await databaseService.deleteDatabase(databaseId);
-      setDatabases((prev) => prev.filter((d) => d.id !== databaseId));
+      await databaseService.deleteDatabase(deleteDatabaseId);
+      setDatabases((prev) => prev.filter((d) => d.id !== deleteDatabaseId));
+      setDeleteDatabaseId(null);
     } catch (err) {
       console.error('[App] Delete database failed:', err);
     }
@@ -342,16 +477,17 @@ function App() {
       }).catch(() => { /* non-critical */ });
     }
 
+    resetStepTracking();
     setIsLoading(true);
 
     const placeholderId = `msg-assistant-${Date.now()}`;
     const placeholder: Message = {
       id: placeholderId,
       role: 'assistant',
-      content: '',
+      content: finalMarkdown || '',
       timestamp: timeStr,
       model: modelId,
-      isStreaming: true,
+      isStreaming: false,
     };
 
     setProjects((prev) =>
@@ -362,14 +498,18 @@ function App() {
       )
     );
 
+    currentTurnContextRef.current = { projectId: targetProjectId, placeholderId };
+
     try {
-      if (wsClient?.isReady) {
-        const txId = wsClient.sendChatMessage(prompt, buildChatPayload(
-          targetProjectId!,
-          activeDatabase?.id,
-          modelId
-        ) as any);
-        streamingRef.current[txId] = { projectId: targetProjectId!, placeholderId };
+      if (wsClient?.isReady && targetProjectId) {
+        // Use new ChatAgent format with project_id and text
+        const txId = wsClient.sendChatMessage(
+          targetProjectId,
+          prompt,
+          turnId || undefined,
+          { model: modelId }
+        );
+        streamingRef.current[txId] = { projectId: targetProjectId, placeholderId };
       } else {
         setProjects((prev) =>
           prev.map((p) =>
@@ -446,32 +586,50 @@ function App() {
         onUploadToDatabase={handleUploadToDatabase}
         onOpenCredentials={() => setIsCredentialsModalOpen(true)}
         onAddDemo={handleOpenDemoModal}
+        onTableDeleted={handleDatabaseCreated}
       />
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
-        <ChatArea
-          currentProject={chatAreaProject as any}
-          messages={activeMessages}
-          selectedModelId={selectedModelId}
-          isLoading={isLoading || isLoadingData}
-          isDataLoaded={isDataLoaded}
-          pendingDatabaseName={pendingDatabaseName}
-          availableDatabasesForPicker={databases}
-          onSelectDatabase={handleSelectDatabase}
-          onSendSuggestedPrompt={(suggested) => handleSendMessage(suggested, [], selectedModelId)}
-          availableModels={availableModels}
-          onOpenCredentials={() => setIsCredentialsModalOpen(true)}
-        />
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'row', height: '100%', position: 'relative' }}>
+        {/* Left: Chat + Input */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flex: 1, overflow: 'auto' }}>
+              <ChatArea
+                currentProject={chatAreaProject as any}
+                messages={activeMessages}
+                selectedModelId={selectedModelId}
+                isLoading={isLoading || isLoadingData}
+                isDataLoaded={isDataLoaded}
+                pendingDatabaseName={pendingDatabaseName}
+                availableDatabasesForPicker={databases}
+                onSelectDatabase={handleSelectDatabase}
+                onSendSuggestedPrompt={(suggested) => handleSendMessage(suggested, [], selectedModelId)}
+                availableModels={availableModels}
+                onOpenCredentials={() => setIsCredentialsModalOpen(true)}
+              />
+            </div>
+            <div style={{ minHeight: '1px', maxHeight: '250px', overflow: 'auto', borderTop: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
+              <StepsPanel steps={steps} isLoading={isProcessing} startTime={startTime} endTime={endTime} />
+            </div>
+          </div>
 
-        <ChatInput
-          onSendMessage={handleSendMessage}
-          selectedModelId={selectedModelId}
-          onSelectModel={(modelId) => setSelectedModelId(modelId)}
-          isLoading={isLoading}
-          isDataLoaded={isDataLoaded}
-          availableModels={availableModels}
-          onOpenCredentials={() => setIsCredentialsModalOpen(true)}
-        />
+          <ChatInput
+            onSendMessage={handleSendMessage}
+            selectedModelId={selectedModelId}
+            onSelectModel={(modelId) => setSelectedModelId(modelId)}
+            isLoading={isLoading}
+            isDataLoaded={isDataLoaded}
+            availableModels={availableModels}
+            onOpenCredentials={() => setIsCredentialsModalOpen(true)}
+          />
+        </div>
+
+        {/* Right: Artifacts */}
+        {artifacts.length > 0 && (
+          <div style={{ width: '400px', borderLeft: '1px solid var(--border-color)', overflow: 'hidden' }}>
+            <ArtifactsPanel artifacts={artifacts} />
+          </div>
+        )}
       </div>
 
       <CredentialsModal
@@ -498,6 +656,13 @@ function App() {
         isOpen={isDemoModalOpen}
         onClose={handleDemoModalClose}
         onDemoCreated={fetchAllData}
+      />
+
+      <DeleteDatabaseModal
+        isOpen={deleteDatabaseId !== null}
+        databaseName={databases.find((d) => d.id === deleteDatabaseId)?.name}
+        onConfirm={handleConfirmDeleteDatabase}
+        onCancel={() => setDeleteDatabaseId(null)}
       />
     </div>
   );

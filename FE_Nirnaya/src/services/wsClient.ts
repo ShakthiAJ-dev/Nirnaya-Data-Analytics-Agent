@@ -35,17 +35,24 @@ export type WSFrameType =
   | 'auth'
   | 'ping'
   | 'pong'
-  | 'chat_message'
+  | 'ack'
+  | 'step'
+  | 'final'
+  | 'ask_user'
+  | 'error'
+  | 'cancel'
   | 'stream'
   | 'complete'
-  | 'error'
-  | 'cancel';
+  | 'chat_message';
 
 export interface WSFrame {
   type: WSFrameType;
-  transactionId: string;
-  content: string;
-  timestamp: number;
+  transactionId?: string;
+  content?: string;
+  timestamp?: number;
+  turn_id?: string;
+  chat_id?: string;
+  seq?: number;
   [key: string]: unknown;
 }
 
@@ -191,10 +198,17 @@ export class NirnayaWSClient {
   // Send helpers
   // ------------------------------------------------------------------
 
-  /** Send a chat message to the agent. Returns the transaction ID. */
-  sendChatMessage(prompt: string, extra?: Record<string, unknown>, transactionId?: string): string {
+  /** Send a chat message to the agent (ChatAgent request). Returns the transaction ID. */
+  sendChatMessage(projectId: string, text: string, chatId?: string, extra?: Record<string, unknown>, transactionId?: string): string {
     const txId = transactionId ?? this._genTxId();
-    this._sendFrame('chat_message', txId, prompt, extra);
+    this._send({
+      requestType: 'ChatAgent',
+      transactionId: txId,
+      project_id: projectId,
+      text,
+      ...(chatId && { chat_id: chatId }),
+      ...extra,
+    });
     return txId;
   }
 

@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom';
 import {
   X, ArrowLeft, Table as TableIcon, Database, Eye,
   Tag, Key, Globe, Clock, User, AlertCircle, Hash, Rows,
-  Loader2,
+  Loader2, Trash2,
 } from 'lucide-react';
 import { databaseService } from '../services/databaseService';
 import type { PreviewResponse } from '../services/databaseService';
@@ -29,6 +29,7 @@ interface DatabaseTablesModalProps {
   databaseId: string;
   databaseName: string;
   metadata: any; // full metadata JSON: { tables: { [name]: TableMeta } }
+  onTableDeleted?: () => void; // callback to refresh parent when table is deleted
 }
 
 type View = 'list' | 'detail' | 'preview';
@@ -52,12 +53,15 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
   databaseId,
   databaseName,
   metadata,
+  onTableDeleted,
 }) => {
   const [view, setView] = useState<View>('list');
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [previewData, setPreviewData] = useState<PreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [deleteTableId, setDeleteTableId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const previewScrollRef = useRef<HTMLDivElement>(null);
 
   const tables: [string, TableMeta][] = metadata?.tables
@@ -117,6 +121,24 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
     if (!el || previewLoading || !previewData?.has_more) return;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) {
       loadPreview(selectedTable!, previewData.rows.length);
+    }
+  };
+
+  const handleDeleteTable = async (tableName: string) => {
+    setIsDeleting(true);
+    try {
+      await databaseService.deleteTable(databaseId, tableName);
+      setDeleteTableId(null);
+      // Go back to list view
+      setView('list');
+      setSelectedTable(null);
+      // Call parent callback to refresh
+      onTableDeleted?.();
+    } catch (err: any) {
+      console.error('[DatabaseTablesModal] Delete table failed:', err);
+      alert(err?.message || 'Failed to delete table. Please try again.');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -241,6 +263,18 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
         <button style={{ ...s.previewBtn, marginLeft: 'auto' }} onClick={handleOpenPreview}>
           <Eye size={13} /> Preview
         </button>
+        <button
+          style={{
+            display: 'flex', alignItems: 'center', gap: '6px',
+            padding: '7px 14px', borderRadius: '7px', border: 'none',
+            background: 'rgba(239,68,68,0.12)', color: '#f87171',
+            cursor: 'pointer', fontSize: '12px', fontWeight: 600,
+          }}
+          onClick={() => setDeleteTableId(selectedTable)}
+          title="Delete this table"
+        >
+          <Trash2 size={13} /> Delete
+        </button>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -361,28 +395,150 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
     preview: `Preview — ${selectedTable || ''}`,
   };
 
-  const content = (
-    <div style={s.backdrop} onClick={(e) => e.target === e.currentTarget && handleClose()}>
-      <div style={s.card}>
-        {/* Header */}
-        <div style={s.header}>
-          <Database size={16} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
-          <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
-            {titleMap[view]}
-          </span>
-          <button style={s.closeBtn} onClick={handleClose} title="Close">
-            <X size={16} />
-          </button>
-        </div>
+  // ── Delete Table Confirmation Modal ──────────────────────────────────────────
+  const DeleteTableConfirmation = () => {
+    if (!deleteTableId) return null;
 
-        {/* Body */}
-        <div style={s.body}>
-          {view === 'list' && <ListView />}
-          {view === 'detail' && <DetailView />}
-          {view === 'preview' && <PreviewView />}
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.7)',
+          zIndex: 10001,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '24px',
+        }}
+        onClick={() => !isDeleting && setDeleteTableId(null)}
+      >
+        <div
+          style={{
+            background: '#0f1117',
+            border: '1px solid rgba(239,68,68,0.25)',
+            borderRadius: '12px',
+            padding: '20px',
+            maxWidth: '380px',
+            width: '100%',
+            boxShadow: '0 24px 64px rgba(0,0,0,0.5)',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+            <AlertCircle size={18} style={{ color: '#f87171', flexShrink: 0 }} />
+            <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
+              Delete Table
+            </span>
+          </div>
+
+          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px', lineHeight: 1.5 }}>
+            Are you sure you want to delete <strong>"{deleteTableId}"</strong>? This table and all its data will be permanently removed from the database.
+          </p>
+
+          {isDeleting && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '10px',
+                borderRadius: '6px',
+                marginBottom: '12px',
+                background: 'rgba(239,68,68,0.08)',
+                border: '1px solid rgba(239,68,68,0.2)',
+                fontSize: '12px',
+                color: '#f87171',
+              }}
+            >
+              <Loader2 size={14} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />
+              <span>Deleting table…</span>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => setDeleteTableId(null)}
+              disabled={isDeleting}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '6px',
+                border: '1px solid rgba(255,255,255,0.1)',
+                background: 'rgba(255,255,255,0.05)',
+                color: 'var(--text-secondary)',
+                cursor: isDeleting ? 'not-allowed' : 'pointer',
+                fontSize: '12px',
+                fontWeight: 600,
+                opacity: isDeleting ? 0.5 : 1,
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => handleDeleteTable(deleteTableId)}
+              disabled={isDeleting}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '6px',
+                border: '1px solid #b91c1c',
+                background: '#dc2626',
+                color: '#fff',
+                cursor: isDeleting ? 'not-allowed' : 'pointer',
+                fontSize: '12px',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                opacity: isDeleting ? 0.8 : 1,
+              }}
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />
+                  <span>Deleting…</span>
+                </>
+              ) : (
+                <>
+                  <Trash2 size={12} />
+                  <span>Delete</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    );
+  };
+
+  const content = (
+    <>
+      <div style={s.backdrop} onClick={(e) => e.target === e.currentTarget && handleClose()}>
+        <div style={s.card}>
+          {/* Header */}
+          <div style={s.header}>
+            <Database size={16} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
+            <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
+              {titleMap[view]}
+            </span>
+            <button style={s.closeBtn} onClick={handleClose} title="Close">
+              <X size={16} />
+            </button>
+          </div>
+
+          {/* Body */}
+          <div style={s.body}>
+            {view === 'list' && <ListView />}
+            {view === 'detail' && <DetailView />}
+            {view === 'preview' && <PreviewView />}
+          </div>
+        </div>
+      </div>
+
+      {/* Delete Table Confirmation Modal */}
+      <DeleteTableConfirmation />
+
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+    </>
   );
 
   return ReactDOM.createPortal(content, document.body);
