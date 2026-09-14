@@ -547,37 +547,6 @@ function App() {
     setCurrentProjectId(null);
   };
 
-  const handleStopGeneration = useCallback(() => {
-    if (wsClient?.isReady) {
-      wsClient.cancelTransaction();
-    }
-    const targetProjId = currentProjectId;
-    if (targetProjId) {
-      setRunningProjectIds((prev) => ({ ...prev, [targetProjId]: false }));
-      const placeholderId = currentTurnContextRef.current?.placeholderId;
-      setProjects((prev) =>
-        prev.map((p) =>
-          p.id === targetProjId
-            ? {
-                ...p,
-                messages: (p.messages || []).map((m) =>
-                  (placeholderId && m.id === placeholderId) || m.id === activeTurnIdRef.current
-                    ? {
-                        ...m,
-                        content: m.content ? `${m.content}\n\n*(Generation cancelled)*` : '*(Generation cancelled)*',
-                        isStreaming: false,
-                      }
-                    : m
-                ),
-              }
-            : p
-        )
-      );
-    }
-    activeTurnIdRef.current = null;
-    currentTurnContextRef.current = null;
-  }, [wsClient, currentProjectId]);
-
   const handleSelectProject = (projectId: string) => {
     setCurrentProjectId(projectId);
     const proj = projects.find((p) => p.id === projectId);
