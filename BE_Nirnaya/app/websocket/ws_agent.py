@@ -389,6 +389,30 @@ async def _receive_loop(
             )
             continue
 
+        # ── cancel / pause / stop — cancel active turn ─────────────────
+        if request_type in ("cancel", "pause", "stop"):
+            target_tx = msg.get("targetTransactionId") or transaction_id
+            cancelled = ws_manager.cancel(session_id, target_tx)
+            if not cancelled:
+                cancelled_count = ws_manager.cancel_all(session_id)
+                cancelled = cancelled_count > 0
+            logger.info(
+                "ws_cancel_requested",
+                session_id=session_id,
+                transaction_id=transaction_id,
+                cancelled=cancelled,
+            )
+            await _safe_send(
+                ws,
+                _make_frame(
+                    "cancelled",
+                    transaction_id,
+                    content="Generation paused/cancelled by user",
+                    extra={"cancelled": cancelled},
+                ),
+            )
+            continue
+
         # ── resume — reconnect replay ──────────────────────────────────
         if request_type == "resume":
             task = asyncio.create_task(handle_resume_frame(ws, msg, redis_service))
@@ -402,7 +426,7 @@ async def _receive_loop(
                 "error",
                 transaction_id,
                 content=f"Unknown requestType: {request_type!r}. "
-                        "Valid types: ping, ChatAgent, ask_user_response, resume",
+                        "Valid types: ping, ChatAgent, ask_user_response, cancel, resume",
             ),
         )
 

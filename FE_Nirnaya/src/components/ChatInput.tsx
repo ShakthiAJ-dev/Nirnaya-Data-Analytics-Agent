@@ -1,15 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  Plus,
   Send,
-  FileText,
-  FileSpreadsheet,
-  FileCode,
   X,
   ChevronDown,
   Sparkles,
   Zap,
   KeyRound,
+  Database,
+  AlertTriangle,
+  Square,
 } from 'lucide-react';
 import type { FileAttachment } from '../types';
 import type { BackendModel } from '../hooks/useModels';
@@ -35,6 +34,12 @@ interface ChatInputProps {
   availableModels?: BackendModel[];
   /** Callback to open the LLM Credentials modal when user needs to add keys. */
   onOpenCredentials?: () => void;
+  /** True when no database has been selected yet — blocks send and shows an inline error. */
+  noDatabaseSelected?: boolean;
+  /** Open the demo database init modal — shown as a quick-action in the no-DB error banner. */
+  onAddDemo?: () => void;
+  /** Callback to cancel/pause generation. */
+  onStopGeneration?: () => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -45,13 +50,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   isDataLoaded = false,
   availableModels = [],
   onOpenCredentials,
+  noDatabaseSelected = false,
+  onAddDemo,
+  onStopGeneration,
 }) => {
   const [content, setContent] = useState('');
-  const [stagedFiles, setStagedFiles] = useState<FileAttachment[]>([]);
   const [showModelPicker, setShowModelPicker] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showNoDatabaseError, setShowNoDatabaseError] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modelPickerRef = useRef<HTMLDivElement>(null);
+  const noDatabaseDismissRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const hasModels = availableModels.length > 0;
 
@@ -93,51 +101,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelsKey]);
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    const newAttachments: FileAttachment[] = [];
-    Array.from(files).forEach((file) => {
-      const ext = file.name.split('.').pop()?.toLowerCase() || '';
-      newAttachments.push({
-        id: `file-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-        name: file.name,
-        size: file.size,
-        type: file.type || 'application/octet-stream',
-        extension: ext,
-        uploadedAt: new Date().toISOString(),
-      });
-    });
-
-    setStagedFiles((prev) => [...prev, ...newAttachments]);
-    // Reset file input value so user can upload same file again if desired
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-
-  const handleRemoveStagedFile = (fileId: string) => {
-    setStagedFiles((prev) => prev.filter((f) => f.id !== fileId));
-  };
-
-  const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  const getFileIcon = (ext: string) => {
-    if (['csv', 'xlsx', 'xls', 'parquet'].includes(ext)) {
-      return <FileSpreadsheet size={13} style={{ color: 'var(--accent-emerald)' }} />;
-    }
-    if (['sql', 'json', 'py', 'ts'].includes(ext)) {
-      return <FileCode size={13} style={{ color: 'var(--accent-cyan)' }} />;
-    }
-    return <FileText size={13} style={{ color: '#94a3b8' }} />;
-  };
-
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Escape' && isLoading) {
+      e.preventDefault();
+      onStopGeneration?.();
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -145,7 +114,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   const handleSend = () => {
-    if ((!content.trim() && stagedFiles.length === 0) || isLoading) return;
+    if (!content.trim() || isLoading) return;
+
+    // Guard: no database selected
+    if (noDatabaseSelected) {
+      // Show the error banner and auto-dismiss after 4s
+      setShowNoDatabaseError(true);
+      if (noDatabaseDismissRef.current) clearTimeout(noDatabaseDismissRef.current);
+      noDatabaseDismissRef.current = setTimeout(() => setShowNoDatabaseError(false), 4000);
+      return;
+    }
 
     if (!hasModels) {
       if (onOpenCredentials) {
@@ -162,9 +140,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       return;
     }
 
-    onSendMessage(content.trim(), stagedFiles, modelToUse);
+    onSendMessage(content.trim(), [], modelToUse);
     setContent('');
-    setStagedFiles([]);
 
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -173,83 +150,104 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   return (
     <div className="chat-input-wrapper">
-      <div className="chat-input-container">
-        {/* Staged Attached Files Bar */}
-        {stagedFiles.length > 0 && (
-          <div className="staged-files-bar">
-            {stagedFiles.map((file) => (
-              <div key={file.id} className="staged-file-chip">
-                {getFileIcon(file.extension)}
-                <span className="staged-file-name" title={file.name}>
-                  {file.name}
-                </span>
-                <span className="staged-file-size">({formatFileSize(file.size)})</span>
-                <button
-                  type="button"
-                  className="btn-remove-staged-file"
-                  onClick={() => handleRemoveStagedFile(file.id)}
-                  title="Remove file"
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            ))}
+      {/* No-database error banner */}
+      {showNoDatabaseError && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: '10px',
+            padding: '10px 16px', marginBottom: '8px',
+            background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)',
+            borderRadius: '10px', animation: 'shake 0.4s ease',
+          }}
+        >
+          <AlertTriangle size={15} style={{ color: '#f59e0b', flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#fbbf24' }}>
+              No database selected
+            </span>
+            <span style={{ fontSize: '12px', color: 'var(--text-secondary)', marginLeft: '6px' }}>
+              Select a database from the sidebar or load the demo to start chatting.
+            </span>
           </div>
-        )}
+          {onAddDemo && (
+            <button
+              type="button"
+              onClick={() => { setShowNoDatabaseError(false); onAddDemo(); }}
+              style={{
+                padding: '5px 12px', borderRadius: '6px', border: 'none',
+                background: 'rgba(245,158,11,0.2)', color: '#fbbf24',
+                cursor: 'pointer', fontSize: '12px', fontWeight: 600,
+                display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0,
+              }}
+            >
+              <Database size={12} />
+              <span>Load Demo</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowNoDatabaseError(false)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '2px', flexShrink: 0 }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
+      <div className="chat-input-container">
         {/* Input Textarea Row */}
         <div className="input-main-row">
-          {/* Plus icon to add files */}
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileSelect}
-            multiple
-            accept=".csv,.xlsx,.xls,.json,.parquet,.txt,.pdf,.sql"
-            style={{ display: 'none' }}
-            id="file-upload-input"
-          />
-          <button
-            type="button"
-            className="btn-plus-attach"
-            onClick={() => fileInputRef.current?.click()}
-            title="Attach data files (CSV, Excel, JSON, Parquet, SQL, PDF)"
-            id="btn-attach-files"
-          >
-            <Plus size={18} strokeWidth={2.5} />
-          </button>
-
           {/* Chat Textarea */}
-          <textarea
-            ref={textareaRef}
-            className="chat-textarea"
-            placeholder={
-              !isDataLoaded || hasModels
-                ? 'Ask questions based on your data or project... (Shift+Enter for newline)'
-                : 'Add an API key in settings to start asking analytics questions...'
-            }
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={1}
-            disabled={isLoading}
-            id="chat-textarea-input"
-          />
+          <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <textarea
+              ref={textareaRef}
+              className="chat-textarea"
+              placeholder={
+                isLoading
+                  ? 'Generating response... Click Pause to stop (Esc)'
+                  : !isDataLoaded || hasModels
+                  ? 'Ask questions based on your data or project... (Shift+Enter for newline)'
+                  : 'Add an API key in settings to start asking analytics questions...'
+              }
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              onKeyDown={handleKeyDown}
+              rows={1}
+              id="chat-textarea-input"
+            />
+            {isLoading && (
+              <button
+                type="button"
+                className="chat-pause-indicator"
+                onClick={onStopGeneration}
+                title="Click to pause response"
+              >
+                <span className="pulse-dot" />
+                <span>Pause</span>
+              </button>
+            )}
+          </div>
 
-          {/* Send Button */}
+          {/* Send or Stop Button */}
           <button
             type="button"
-            className="btn-send-message"
-            onClick={handleSend}
-            disabled={(!content.trim() && stagedFiles.length === 0) || isLoading}
+            className={`btn-send-message ${isLoading ? 'btn-stop-generating' : ''}`}
+            onClick={isLoading ? onStopGeneration : handleSend}
+            disabled={!isLoading && !content.trim()}
             title={
-              !hasModels
+              isLoading
+                ? 'Pause / Stop generation (Esc)'
+                : !hasModels
                 ? 'Add an API key to send queries'
                 : 'Send query (Enter)'
             }
             id="btn-send-chat"
           >
-            <Send size={16} strokeWidth={2.2} />
+            {isLoading ? (
+              <Square size={13} strokeWidth={2.2} fill="currentColor" />
+            ) : (
+              <Send size={16} strokeWidth={2.2} />
+            )}
           </button>
         </div>
 
@@ -417,6 +415,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       <div className="input-footer-hint">
         Nirnaya synthesizes insights across datasets. Verify critical business calculations before finalizing decisions.
       </div>
+      <style>{`
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          15% { transform: translateX(-6px); }
+          30% { transform: translateX(6px); }
+          45% { transform: translateX(-4px); }
+          60% { transform: translateX(4px); }
+          75% { transform: translateX(-2px); }
+          90% { transform: translateX(2px); }
+        }
+      `}</style>
     </div>
   );
 };

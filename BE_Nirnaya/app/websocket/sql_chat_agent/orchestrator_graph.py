@@ -97,6 +97,14 @@ async def _get_ws(config: RunnableConfig):
     )
 
 
+def _elapsed_ms(config: RunnableConfig) -> int:
+    """Return milliseconds elapsed since the turn start (monotonic clock)."""
+    import time
+    cfg = config.get("configurable", {})
+    start = cfg.get("turn_start_ms", 0)
+    return int(time.monotonic() * 1000) - start if start else 0
+
+
 def _model(config: RunnableConfig) -> tuple[str, str | None]:
     """Return (model_name, provider) from config. Falls back to default."""
     cfg = config.get("configurable", {})
@@ -794,6 +802,7 @@ async def direct_response_node(state: OrchestratorState, config: RunnableConfig)
         markdown=markdown,
         artifacts=[],           # direct response has no artifacts
         follow_up_questions=follow_ups,
+        execution_time_ms=_elapsed_ms(config),
     ))
 
     return {
@@ -830,7 +839,7 @@ async def ask_user_node(state: OrchestratorState, config: RunnableConfig) -> dic
     # Execution continues from the line below.
     user_answer: str = interrupt({"question": question, "mode": mode, "options": options})
 
-    if not user_answer or user_answer.strip() == "__skip__":
+    if not user_answer or user_answer.strip().lower() in ("skip", "__skip__"):
         user_answer = "User did not directly answer — proceed using best judgment and state assumptions made."
 
     logger.info("ask_user_resumed", chat_id=state["chat_id"])
@@ -1091,6 +1100,7 @@ async def synthesize_final_node(state: OrchestratorState, config: RunnableConfig
         markdown=markdown,
         artifacts=artifacts_payload,
         follow_up_questions=follow_ups,
+        execution_time_ms=_elapsed_ms(config),
     ))
 
     return {

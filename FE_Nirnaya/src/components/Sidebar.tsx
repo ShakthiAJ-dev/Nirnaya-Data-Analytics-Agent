@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Plus,
   MessageSquare,
@@ -9,6 +9,8 @@ import {
   Layers,
   Eye,
   Sparkles,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import { NirnayaLogo } from './Logo';
 import { DatabaseTablesModal } from './DatabaseTablesModal';
@@ -30,6 +32,11 @@ interface SidebarProps {
   onUploadToDatabase: (databaseId: string) => void;
   onOpenCredentials: () => void;
   onAddDemo: () => void;
+  onTableDeleted?: () => void;
+  /** When true, the user is inside a project — database switching is locked */
+  isInsideProject?: boolean;
+  /** Navigate back to the home/no-project state */
+  onGoHome?: () => void;
 }
 
 interface ModalState {
@@ -54,9 +61,50 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onUploadToDatabase,
   onOpenCredentials,
   onAddDemo,
+  onTableDeleted,
+  isInsideProject = false,
+  onGoHome,
 }) => {
   const [dbHovered, setDbHovered] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(256); // px
+  const MIN_WIDTH = 200;
+  const MAX_WIDTH = typeof window !== 'undefined' ? Math.round(window.innerWidth / 2) : 600;
+  const isDraggingRef = useRef(false);
+  const dragStartXRef = useRef(0);
+  const dragStartWidthRef = useRef(0);
+
+  const onDragStart = useCallback((e: React.MouseEvent) => {
+    if (collapsed) return;
+    isDraggingRef.current = true;
+    dragStartXRef.current = e.clientX;
+    dragStartWidthRef.current = sidebarWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [collapsed, sidebarWidth]);
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDraggingRef.current) return;
+      const delta = e.clientX - dragStartXRef.current;
+      const newW = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, dragStartWidthRef.current + delta));
+      setSidebarWidth(newW);
+    };
+    const onMouseUp = () => {
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [MAX_WIDTH]);
 
   const hasCredentials = Boolean(
     credentials.anthropicApiKey || credentials.openaiApiKey || credentials.geminiApiKey
@@ -81,13 +129,66 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <aside className="nirnaya-sidebar">
+    <aside
+      className="nirnaya-sidebar"
+      style={{
+        width: collapsed ? '52px' : `${sidebarWidth}px`,
+        minWidth: collapsed ? '52px' : `${MIN_WIDTH}px`,
+        maxWidth: collapsed ? '52px' : `${MAX_WIDTH}px`,
+        overflow: 'hidden',
+        transition: isDraggingRef.current ? 'none' : 'width 0.2s ease',
+        position: 'relative',
+        flexShrink: 0,
+      }}
+    >
       {/* Brand Header */}
-      <div className="sidebar-header">
-        <NirnayaLogo size={36} />
+      <div className="sidebar-header" style={{ justifyContent: collapsed ? 'center' : 'space-between' }}>
+        {/* Logo — hidden when collapsed to save space */}
+        {!collapsed && (
+          <button
+            type="button"
+            onClick={onGoHome}
+            title="Go to home"
+            style={{
+              background: 'none', border: 'none', cursor: onGoHome ? 'pointer' : 'default',
+              padding: 0, display: 'flex', alignItems: 'center', flexShrink: 0,
+            }}
+          >
+            <NirnayaLogo size={32} />
+          </button>
+        )}
+        {/* Collapse / expand toggle — always visible */}
+        <button
+          type="button"
+          onClick={() => setCollapsed((v) => !v)}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          style={{
+            background: 'rgba(255,255,255,0.05)', border: 'none', cursor: 'pointer',
+            color: 'var(--text-secondary)', padding: '6px',
+            display: 'flex', alignItems: 'center', borderRadius: '7px',
+            flexShrink: 0,
+          }}
+        >
+          {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+        </button>
       </div>
 
-      {/* ── Databases Section ─────────────────────────────────────── */}
+      {/* Drag-to-resize handle — on the right edge */}
+      {!collapsed && (
+        <div
+          onMouseDown={onDragStart}
+          style={{
+            position: 'absolute', top: 0, right: 0, width: '4px', height: '100%',
+            cursor: 'col-resize', zIndex: 10,
+            background: 'transparent',
+          }}
+          title="Drag to resize"
+        />
+      )}
+
+      {/* ── Databases Section — hidden when collapsed */}
+      {!collapsed && (
+        <>
       <div className="sidebar-section-label">
         <span>Databases</span>
       </div>
@@ -101,9 +202,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             tableCount={tableCountForDb(db)}
             isActive={pendingDatabaseId === db.id}
             hovered={dbHovered === db.id}
+            isLocked={isInsideProject}
             onMouseEnter={() => setDbHovered(db.id)}
             onMouseLeave={() => setDbHovered(null)}
-            onSelect={() => onSelectDatabase?.(db.id)}
+            onSelect={() => !isInsideProject && onSelectDatabase?.(db.id)}
             onViewTables={(e) => openModal(e, {
               databaseId: db.id,
               databaseName: db.name,
@@ -142,8 +244,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span>New Database</span>
         </button>
       </div>
+        </>
+      )}
 
-      {/* ── Projects Section ───────────────────────────────────────── */}
+      {/* ── Projects Section — hidden when collapsed */}
+      {!collapsed && (
+        <>
       <div className="sidebar-section-label" style={{ marginTop: '8px' }}>
         <span>Projects</span>
       </div>
@@ -214,9 +320,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         )}
       </div>
+        </>
+      )}
 
-      {/* Footer — LLM Credentials (shown after session data loads) */}
-      {isDataLoaded && <div className="sidebar-footer">
+      {/* Footer — LLM Credentials (shown after session data loads, hidden when collapsed) */}
+      {isDataLoaded && !collapsed && <div className="sidebar-footer">
         <button
           type="button"
           className="credentials-card-btn"
@@ -253,6 +361,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           databaseId={modal.databaseId}
           databaseName={modal.databaseName}
           metadata={modal.metadata}
+          onTableDeleted={onTableDeleted}
         />
       )}
     </aside>
@@ -266,6 +375,8 @@ interface DbCardProps {
   tableCount: number;
   isActive?: boolean;
   hovered: boolean;
+  /** When true the database cannot be switched — user is inside a project */
+  isLocked?: boolean;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
   onViewTables: (e: React.MouseEvent) => void;
@@ -275,7 +386,7 @@ interface DbCardProps {
 }
 
 const DbCard: React.FC<DbCardProps> = ({
-  name, tableCount, isActive, hovered,
+  name, tableCount, isActive, hovered, isLocked,
   onMouseEnter, onMouseLeave, onViewTables, onSelect, onUpload, onDelete,
 }) => (
   <div
@@ -283,16 +394,21 @@ const DbCard: React.FC<DbCardProps> = ({
     onMouseEnter={onMouseEnter}
     onMouseLeave={onMouseLeave}
     style={isActive ? { background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.3)' } : undefined}
+    title={isLocked ? 'Database is locked — this project is bound to its database. Start a new chat to switch.' : undefined}
   >
     <div
-      style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0, cursor: onSelect ? 'pointer' : 'default' }}
-      onClick={onSelect}
+      style={{
+        display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0,
+        cursor: isLocked ? 'not-allowed' : (onSelect ? 'pointer' : 'default'),
+        opacity: isLocked ? 0.6 : 1,
+      }}
+      onClick={isLocked ? undefined : onSelect}
     >
       <Database size={13} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
       <span style={{
         fontSize: '12.5px', color: isActive ? '#c7d2fe' : 'var(--text-secondary)',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
-      }}>
+      }} title={name}>
         {name}
       </span>
       <span style={{
@@ -362,6 +478,7 @@ const ProjectRow: React.FC<ProjectRowProps> = ({ project, db, isActive, onSelect
     type="button"
     className={`history-item-btn ${isActive ? 'active' : ''}`}
     onClick={onSelect}
+    title={project.title || 'Untitled'}
   >
     <MessageSquare size={14} style={{ flexShrink: 0, opacity: 0.7 }} />
     <span className="history-item-title">{project.title || 'Untitled'}</span>
@@ -369,9 +486,9 @@ const ProjectRow: React.FC<ProjectRowProps> = ({ project, db, isActive, onSelect
       <span style={{
         fontSize: '10px', padding: '1px 5px', borderRadius: '4px',
         background: 'rgba(6,182,212,0.12)', color: 'var(--accent-cyan)',
-        flexShrink: 0, maxWidth: '60px', overflow: 'hidden',
+        flexShrink: 0, maxWidth: '72px', overflow: 'hidden',
         textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>
+      }} title={db.name}>
         {db.name}
       </span>
     )}

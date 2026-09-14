@@ -26,9 +26,13 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Awaitable, Callable
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+
+# Load .env into os.environ so boto3 can find AWS credentials
+load_dotenv()
 
 from app.api.routes.health import router as health_router
 from app.api.routes.session import router as session_router

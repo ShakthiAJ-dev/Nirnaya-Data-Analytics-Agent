@@ -35,10 +35,8 @@ import time
 from typing import Any
 
 import redis.asyncio as aioredis
-from redis.asyncio import ConnectionPool
 
 from app.core.config import settings
-from app.core.exceptions import RateLimitException
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -63,23 +61,19 @@ class RedisService:
         if not settings.redis_url:
             raise RuntimeError("REDIS_URL is not configured.")
 
-        self._pool = ConnectionPool.from_url(
+        self._client = aioredis.from_url(
             settings.redis_url,
             max_connections=settings.redis_max_connections,
             decode_responses=True,
         )
-        self._client = aioredis.Redis(connection_pool=self._pool)
 
-        # Verify connection
         await self._client.ping()
-        logger.info("redis_service_ready", max_connections=settings.redis_max_connections)
+        logger.info("redis_initialized")
 
     async def close(self) -> None:
         """Graceful shutdown — called inside lifespan teardown."""
         if self._client:
             await self._client.aclose()
-        if self._pool:
-            await self._pool.aclose()
         logger.info("redis_service_closed")
 
     @property

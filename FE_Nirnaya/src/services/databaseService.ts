@@ -28,9 +28,7 @@ export interface PreviewResponse {
 }
 
 export interface DemoCreateResponse {
-  project_id: string;
   database_id: string;
-  title: string;
   database_name: string;
   schema_name: string;
   metadata_path?: string;
@@ -59,6 +57,11 @@ export const databaseService = {
 
   deleteDatabase: async (databaseId: string): Promise<void> => {
     await api.delete(`/databases/${databaseId}`);
+  },
+
+  getMetadata: async (databaseId: string): Promise<any> => {
+    const res = await api.get<{ success: boolean; data: any }>(`/databases/${databaseId}/metadata`);
+    return res.data;
   },
 
   presignUpload: async (databaseId: string, filename: string): Promise<PresignUploadResponse> => {
@@ -98,5 +101,9 @@ export const databaseService = {
     }
 
     return databaseService.processUpload(databaseId, file_path, file.name);
+  },
+
+  deleteTable: async (databaseId: string, tableName: string): Promise<void> => {
+    await api.delete(`/databases/${databaseId}/tables/${encodeURIComponent(tableName)}`);
   },
 };

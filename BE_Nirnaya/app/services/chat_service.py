@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS public.artifacts (
     session_id    TEXT NOT NULL,
     database_id   UUID REFERENCES public.databases(id) ON DELETE CASCADE,
     project_id    UUID REFERENCES public.projects(id) ON DELETE CASCADE,
-    message_id    UUID REFERENCES public.chat_messages(id) ON DELETE SET NULL,
+    message_id    UUID REFERENCES public.chat_messages(id) ON DELETE CASCADE,
     type          TEXT NOT NULL CHECK (type IN ('kpi', 'chart', 'table')),
     title         TEXT NOT NULL,
     sql_query     TEXT NOT NULL,
@@ -217,6 +217,45 @@ class ChatService:
             return list(reversed(rows))  # restore chronological order
         except Exception as exc:
             logger.warning("get_recent_turns_failed", project_id=project_id, error=str(exc))
+            return []
+
+    async def get_all_turns(
+        self,
+        project_id: str,
+    ) -> list[dict[str, Any]]:
+        """
+        Return ALL completed turns for a project in chronological order.
+        Used by the REST endpoint that FE calls on page load to restore chat history.
+
+        Each row contains:
+          id            — turn_id (UUID)
+          user_message  — the user’s question
+          output        — {markdown, artifact_ids[], follow_up_questions[], execution_time_ms}
+          seq           — ordinal position within the project
+          created_at    — ISO-8601 timestamp
+
+        Incomplete turns (output IS NULL, still running) are excluded.
+        """
+        try:
+            resp = (
+                await self._supa.admin.table(CHAT_MESSAGES_TABLE)
+                .select("id, user_message, output, seq, created_at")
+                .eq("project_id", project_id)
+                .eq("session_id", self._session_id)
+                .filter("output", "not.is", "null")
+                .order("seq", desc=False)  # chronological
+                .execute()
+            )
+            rows = resp.data or []
+            logger.info(
+                "get_all_turns",
+                project_id=project_id,
+                session_id=self._session_id,
+                rows_found=len(rows),
+            )
+            return rows
+        except Exception as exc:
+            logger.warning("get_all_turns_failed", project_id=project_id, error=str(exc))
             return []
 
     # ------------------------------------------------------------------

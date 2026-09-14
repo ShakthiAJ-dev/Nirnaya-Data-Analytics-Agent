@@ -99,17 +99,26 @@ async def _promote_artifact(
     config: dict[str, Any] = {}
     if artifact_type == "chart":
         config = {
-            "chart_family": finalized.get("chart_family"),
-            "chart_type":   finalized.get("chart_type"),
-            "encoding":     _to_plain_dict(finalized.get("encoding")),
+            "chart_family":  finalized.get("chart_family"),
+            "chart_type":    finalized.get("chart_type"),
+            "encoding":      _to_plain_dict(finalized.get("encoding")),
+            # Optional display hints — empty dict when LLM didn't populate
+            "chart_config":  finalized.get("chart_config") or {},
         }
     elif artifact_type == "kpi":
         config = {
-            "card_type": finalized.get("card_type"),
-            "format":    finalized.get("format"),
+            "card_type":      finalized.get("card_type"),
+            "format":         finalized.get("format"),
+            # Optional display hints — empty dict when LLM didn't populate
+            "display_config": finalized.get("display_config") or {},
         }
     elif artifact_type == "table":
-        config = {"columns": _to_plain_dict(finalized.get("columns", []))}
+        config = {
+            "columns":       _to_plain_dict(finalized.get("columns", [])),
+            # Optional table-level settings — empty dict when LLM didn't populate
+            "table_config":  finalized.get("table_config") or {},
+        }
+
 
     result_rows: list[dict] = query_result.get("rows", [])
     sql_query: str = query_result.get("sql", "")

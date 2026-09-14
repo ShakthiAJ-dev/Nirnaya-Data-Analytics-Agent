@@ -113,6 +113,7 @@ def make_final(
     markdown: str,
     artifacts: list[dict],       # full artifact details — not just IDs
     follow_up_questions: list[str],
+    execution_time_ms: int | None = None,  # wall-clock ms from turn start → final event
 ) -> dict[str, Any]:
     """
     Terminal WS event sent when the graph completes.
@@ -120,8 +121,10 @@ def make_final(
     need to make a separate REST call.
     Each artifact dict: {artifact_id, type, title, note, key_numbers, config,
                          result_data, sql_query, status, error_message}
+    `execution_time_ms` is the total wall-clock time from turn start to this
+    event — FE renders this as "Analysed in X.Xs" beneath the user question.
     """
-    return {
+    event: dict[str, Any] = {
         "type": "final",
         "chat_id": chat_id,
         "turn_id": turn_id,
@@ -131,6 +134,9 @@ def make_final(
         "follow_up_questions": follow_up_questions,
         "ts": _now(),
     }
+    if execution_time_ms is not None:
+        event["execution_time_ms"] = execution_time_ms
+    return event
 
 
 def make_error(

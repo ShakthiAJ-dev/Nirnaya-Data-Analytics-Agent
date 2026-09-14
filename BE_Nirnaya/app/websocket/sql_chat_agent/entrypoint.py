@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine
@@ -82,14 +83,31 @@ def make_ws_sender(
     ws_send_raw: Callable[[str], Coroutine],
     redis_service: RedisService,
     turn_id: str,
+    steps_log: list[dict] | None = None,
 ) -> Callable[[dict], Coroutine]:
     """
     Wraps the raw WS send function:
     - Serialises event dict to JSON
     - Appends to Redis stream for replay on reconnect (TTL: 30 min)
+    - If steps_log is provided, silently accumulates every `step` event
+      (compact form) so the caller can persist them to DB after the turn.
     - Swallows send errors (client may have disconnected)
     """
     async def _send(event: dict) -> None:
+        # Accumulate step events for DB persistence (only the fields FE needs)
+        if steps_log is not None and event.get("type") == "step":
+            steps_log.append({
+                "seq":         event.get("seq"),
+                "name":        event.get("name"),
+                "status":      event.get("status"),
+                "title":       event.get("title"),
+                "detail":      event.get("detail"),
+                "reasoning":   event.get("reasoning", ""),
+                "artifact_id": event.get("artifact_id"),
+                "worker_id":   event.get("worker_id"),
+                "ts":          event.get("ts"),
+            })
+
         payload = json.dumps(event)
         try:
             key = stream_key(turn_id)
@@ -272,16 +290,25 @@ async def handle_chat_agent(
 
     chat_svc = ChatService(session_id, supabase_service)
     seq_counter = SeqCounter()
-    ws_send = make_ws_sender(ws_send_raw, redis_service, turn_id)
+    steps_log: list[dict] = []  # collects every step event for DB persistence
+    ws_send = make_ws_sender(ws_send_raw, redis_service, turn_id, steps_log)
+    turn_start_ms: int = int(time.monotonic() * 1000)  # monotonic clock, milliseconds
 
     # chat_id = turn_id: each turn is its own checkpointer thread.
-    # The project_id groups all turns for the same conversation.
+    # The project_id groups all turns for context/history.
     chat_id = turn_id
 
     # ── 1. Resolve project → database_id ──────────────────────────────
     try:
         project_svc = ProjectService(session_id, supabase_service)
         project_record = await project_svc.get(project_id)
+        if not project_record:
+            await ws_send(make_error(
+                chat_id=chat_id, turn_id=turn_id,
+                seq=await seq_counter.next(),
+                message=f"Project '{project_id}' not found or not accessible.",
+            ))
+            return
         database_id: str = project_record.get("database_id", "")
     except Exception as exc:
         await ws_send(make_error(
@@ -321,7 +348,15 @@ async def handle_chat_agent(
             message=f"Database '{database_id}' not found or not accessible.",
         ))
         return
-    schema_name: str = db_record["schema_name"]
+
+    schema_name = db_record.get("schema_name")
+    if not schema_name:
+        await ws_send(make_error(
+            chat_id=chat_id, turn_id=turn_id,
+            seq=await seq_counter.next(),
+            message=f"Database record corrupted: missing schema_name.",
+        ))
+        return
 
     # ── 5. Load metadata ──────────────────────────────────────────────
     full_metadata = await _load_metadata_from_storage(session_id, database_id, supabase_service)
@@ -400,6 +435,8 @@ async def handle_chat_agent(
     # ── 10. Build LangGraph config ────────────────────────────────────────────────
     # thread_id = turn_id (= chat_id) so each turn is independently checkpointable.
     # turn_message_id is passed so workers can link artifacts to the right row.
+    # turn_start_ms is the monotonic clock in ms at turn creation — nodes use this
+    # to compute execution_time_ms for the final WS event and DB update.
     thread_config: RunnableConfig = {
         "configurable": {
             "thread_id":        turn_id,           # checkpointer key = chat_messages.id
@@ -415,6 +452,7 @@ async def handle_chat_agent(
             "effective_db_id":  database_id,
             "project_id":       project_id,
             "turn_message_id":  turn_id,           # = chat_messages.id for artifact FK
+            "turn_start_ms":    turn_start_ms,     # monotonic ms — for execution_time_ms
         }
     }
 
@@ -427,6 +465,29 @@ async def handle_chat_agent(
 
     try:
         result = await compiled_graph.ainvoke(initial_state, config=thread_config)
+
+        # Check if graph was interrupted (ask_user)
+        if "__interrupt__" in result:
+            logger.info("graph_interrupted_for_ask_user", turn_id=turn_id)
+            # Cache pending turn context for resume
+            pending_context = {
+                "chat_id": chat_id,
+                "project_id": project_id,
+                "database_id": database_id,
+                "turn_id": turn_id,
+                "turn_start_ms": turn_start_ms,
+                "seq": seq_counter.current,
+                "full_metadata": full_metadata,
+                "model": model,
+                "provider": provider,
+            }
+            await redis_service.cache_set(
+                f"pending_turn:{turn_id}",
+                pending_context,
+                ttl=1800  # 30 min
+            )
+            return
+
         final_markdown      = result.get("final_markdown", "")
         follow_up_questions = result.get("follow_up_questions", [])
         artifact_ids = [
@@ -444,6 +505,7 @@ async def handle_chat_agent(
         return
 
     # ── 11. Fill in turn output (answer side of the single row) ──────
+    elapsed_ms: int = int(time.monotonic() * 1000) - turn_start_ms
     try:
         await chat_svc.update_turn_output(
             turn_id=turn_id,
@@ -451,6 +513,8 @@ async def handle_chat_agent(
                 "markdown":            final_markdown,
                 "artifact_ids":        artifact_ids,
                 "follow_up_questions": follow_up_questions,
+                "execution_time_ms":   elapsed_ms,
+                "steps":               steps_log,   # ordered list of step events
             },
         )
     except Exception as exc:
@@ -508,35 +572,80 @@ async def handle_ask_user_response(
 
     pending: dict = pending_raw if isinstance(pending_raw, dict) else {}
     chat_id = pending.get("chat_id", "")
-    thread_config = pending.get("config", {})
+    project_id = pending.get("project_id", "")
+    database_id = pending.get("database_id")
+    turn_start_ms = pending.get("turn_start_ms", int(time.monotonic() * 1000))
 
     if not chat_id or not checkpointer:
+        logger.warning(
+            "ask_user_resume_missing_chat_or_checkpointer",
+            turn_id=turn_id,
+            has_chat=bool(chat_id),
+            has_cp=bool(checkpointer),
+        )
         return
 
     seq_counter = SeqCounter(start=pending.get("seq", 10))
-    ws_send = make_ws_sender(ws_send_raw, redis_service, turn_id)
+    steps_log: list[dict[str, Any]] = []
+    ws_send = make_ws_sender(ws_send_raw, redis_service, turn_id, steps_log)
 
     session_svc = SessionService(redis_service)
     llm_service = LLMService.from_session(session_id, session_svc)
     chat_svc = ChatService(session_id, supabase_service)
 
-    thread_config.setdefault("configurable", {})
-    thread_config["configurable"].update({
-        "model":            model,
-        "provider":         provider,
-        "ws_send":          ws_send,
-        "seq_counter":      seq_counter,
-        "llm_service":      llm_service,
-        "supabase_service": supabase_service,
-        "redis_service":    redis_service,
-        "chat_service":     chat_svc,
-        "full_metadata":    pending.get("full_metadata", {}),
-    })
+    thread_config: RunnableConfig = {
+        "configurable": {
+            "thread_id":        turn_id,
+            "model":            model,
+            "provider":         provider,
+            "ws_send":          ws_send,
+            "seq_counter":      seq_counter,
+            "llm_service":      llm_service,
+            "supabase_service": supabase_service,
+            "redis_service":    redis_service,
+            "chat_service":     chat_svc,
+            "full_metadata":    pending.get("full_metadata", {}),
+            "effective_db_id":  database_id,
+            "project_id":       project_id,
+            "turn_message_id":  turn_id,
+            "turn_start_ms":    turn_start_ms,
+        }
+    }
 
     compiled_graph = build_orchestrator_graph(checkpointer=checkpointer)
 
     try:
-        await compiled_graph.ainvoke(Command(resume=answer), config=thread_config)
+        result = await compiled_graph.ainvoke(Command(resume=answer), config=thread_config)
+
+        if "__interrupt__" in result:
+            logger.info("graph_reinterrupted_for_ask_user", turn_id=turn_id)
+            pending["seq"] = seq_counter.current
+            await redis_service.cache_set(f"pending_turn:{turn_id}", pending, ttl=1800)
+            return
+
+        final_markdown = result.get("final_markdown", "")
+        follow_up_questions = result.get("follow_up_questions", [])
+        artifact_ids = [
+            r["artifact_id"]
+            for r in result.get("artifact_results", [])
+            if r.get("status") == "fresh"
+        ]
+
+        # Persist final output
+        try:
+            await chat_svc.update_turn_output(
+                turn_id=turn_id,
+                output={
+                    "markdown":            final_markdown,
+                    "artifact_ids":        artifact_ids,
+                    "follow_up_questions": follow_up_questions,
+                    "execution_time_ms":   int(time.monotonic() * 1000) - turn_start_ms,
+                    "steps":               steps_log,
+                },
+            )
+        except Exception as exc:
+            logger.warning("turn_output_update_failed_on_resume", error=str(exc))
+
     except Exception as exc:
         logger.error("ask_user_resume_error", turn_id=turn_id, error=str(exc))
         await ws_send(make_error(
@@ -544,5 +653,12 @@ async def handle_ask_user_response(
             seq=await seq_counter.next(),
             message=f"Failed to resume: {str(exc)[:200]}",
         ))
+
+    # Clean up checkpoint + pending cache
+    if checkpointer:
+        try:
+            await checkpointer.adelete({"configurable": {"thread_id": turn_id}})
+        except Exception:
+            pass
 
     await redis_service.cache_delete(f"pending_turn:{turn_id}")
