@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import {
   Copy,
   Check,
@@ -15,190 +15,53 @@ import {
   CheckCircle,
   AlertCircle,
   Sparkles,
-  X,
-  BarChart2,
-  List,
   Trash2,
   MoreVertical,
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { ArtifactMiniPreview, ArtifactSidePanel } from './ArtifactRenderer';
 import { LogoEmblem } from './Logo';
-import type { Message, Project, Database as DatabaseType, StepEvent, Artifact, AskUserEvent } from '../types';
+import type { Message, Project, Database as DatabaseType, Artifact, AskUserEvent } from '../types';
 import type { BackendModel } from '../services/sessionService';
 
 // ---------------------------------------------------------------------------
-// Inline Markdown Renderer
+// Markdown renderer (react-markdown + remark-gfm for tables, strikethrough, etc.)
 // ---------------------------------------------------------------------------
-
-function renderInline(text: string): React.ReactNode {
-  const parts: React.ReactNode[] = [];
-  const regex = /(\*\*(.+?)\*\*)|(`([^`]+)`)|(\*(.+?)\*)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let key = 0;
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(<span key={key++}>{text.slice(lastIndex, match.index)}</span>);
-    }
-    if (match[1]) {
-      parts.push(<strong key={key++}>{match[2]}</strong>);
-    } else if (match[3]) {
-      parts.push(<code key={key++} className="md-inline-code">{match[4]}</code>);
-    } else if (match[5]) {
-      parts.push(<em key={key++}>{match[6]}</em>);
-    }
-    lastIndex = regex.lastIndex;
-  }
-  if (lastIndex < text.length) {
-    parts.push(<span key={key++}>{text.slice(lastIndex)}</span>);
-  }
-  return parts.length === 0 ? text : parts.length === 1 ? parts[0] : parts;
-}
-
-const MarkdownContent: React.FC<{ text: string }> = ({ text }) => {
-  const lines = text.split('\n');
-  const elements: React.ReactNode[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (line.trimStart().startsWith('```')) {
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].trimStart().startsWith('```')) {
-        codeLines.push(lines[i]);
-        i++;
-      }
-      elements.push(
-        <pre key={`cb-${i}`} className="md-pre"><code>{codeLines.join('\n')}</code></pre>
-      );
-      i++;
-      continue;
-    }
-    if (line.startsWith('### ')) { elements.push(<h3 key={i} className="md-h3">{renderInline(line.slice(4))}</h3>); i++; continue; }
-    if (line.startsWith('## ')) { elements.push(<h2 key={i} className="md-h2">{renderInline(line.slice(3))}</h2>); i++; continue; }
-    if (line.startsWith('# ')) { elements.push(<h1 key={i} className="md-h1">{renderInline(line.slice(2))}</h1>); i++; continue; }
-    if (line === '---' || line === '***' || line === '___') { elements.push(<hr key={i} className="md-hr" />); i++; continue; }
-    if (line.startsWith('- ') || line.startsWith('* ')) {
-      const items: string[] = [];
-      while (i < lines.length && (lines[i].startsWith('- ') || lines[i].startsWith('* '))) {
-        items.push(lines[i].slice(2));
-        i++;
-      }
-      elements.push(<ul key={`ul-${i}`} className="md-ul">{items.map((item, j) => <li key={j}>{renderInline(item)}</li>)}</ul>);
-      continue;
-    }
-    if (/^\d+\. /.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\d+\. /.test(lines[i])) {
-        items.push(lines[i].replace(/^\d+\. /, ''));
-        i++;
-      }
-      elements.push(<ol key={`ol-${i}`} className="md-ol">{items.map((item, j) => <li key={j}>{renderInline(item)}</li>)}</ol>);
-      continue;
-    }
-    if (line.startsWith('> ')) { elements.push(<blockquote key={i} className="md-blockquote">{renderInline(line.slice(2))}</blockquote>); i++; continue; }
-    if (line.trim() === '') { i++; continue; }
-    const paraLines: string[] = [];
-    while (
-      i < lines.length &&
-      lines[i].trim() !== '' &&
-      !lines[i].startsWith('#') &&
-      !lines[i].startsWith('- ') &&
-      !lines[i].startsWith('* ') &&
-      !lines[i].startsWith('> ') &&
-      !lines[i].trimStart().startsWith('```') &&
-      !/^\d+\. /.test(lines[i]) &&
-      lines[i] !== '---' && lines[i] !== '***'
-    ) {
-      paraLines.push(lines[i]);
-      i++;
-    }
-    if (paraLines.length > 0) {
-      elements.push(
-        <p key={`p-${i}`} className="md-p">
-          {paraLines.map((pl, j) => (
-            <React.Fragment key={j}>{j > 0 && <br />}{renderInline(pl)}</React.Fragment>
-          ))}
-        </p>
-      );
-    }
-  }
-  return <div className="markdown-content">{elements}</div>;
-};
-
-// ---------------------------------------------------------------------------
-// TypingDots
-// ---------------------------------------------------------------------------
-
-const TypingDots: React.FC = () => (
-  <div className="typing-indicator-box">
-    <div className="typing-dot" />
-    <div className="typing-dot" />
-    <div className="typing-dot" />
+const MarkdownContent: React.FC<{ text: string }> = ({ text }) => (
+  <div className="markdown-content">
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        code({ className, children, ...props }: any) {
+          const isBlock = /language-/.test(className ?? '');
+          return isBlock
+            ? <pre className="md-pre"><code className={className}>{children}</code></pre>
+            : <code className="md-inline-code" {...props}>{children}</code>;
+        },
+        table: ({ children }) => (
+          <div className="md-table-wrap"><table className="md-table">{children}</table></div>
+        ),
+        h1: ({ children }) => <h1 className="md-h1">{children}</h1>,
+        h2: ({ children }) => <h2 className="md-h2">{children}</h2>,
+        h3: ({ children }) => <h3 className="md-h3">{children}</h3>,
+        h4: ({ children }) => <h4 className="md-h4">{children}</h4>,
+        p: ({ children }) => <p className="md-p">{children}</p>,
+        ul: ({ children }) => <ul className="md-ul">{children}</ul>,
+        ol: ({ children }) => <ol className="md-ol">{children}</ol>,
+        blockquote: ({ children }) => <blockquote className="md-blockquote">{children}</blockquote>,
+        hr: () => <hr className="md-hr" />,
+        a: ({ href, children }) => (
+          <a href={href} className="md-link" target="_blank" rel="noopener noreferrer">{children}</a>
+        ),
+      }}
+    >
+      {text}
+    </ReactMarkdown>
   </div>
 );
 
-// ---------------------------------------------------------------------------
-// ThinkingSteps (live — inside assistant bubble during processing)
-// ---------------------------------------------------------------------------
-
-const ThinkingSteps: React.FC<{ steps: StepEvent[] }> = ({ steps }) => {
-  const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
-
-  const toggleStep = (seq: number) => {
-    setExpandedSteps((prev) => {
-      const next = new Set(prev);
-      if (next.has(seq)) next.delete(seq);
-      else next.add(seq);
-      return next;
-    });
-  };
-
-  const sortedSteps = [...steps].sort((a, b) => a.seq - b.seq);
-
-  return (
-    <div className="thinking-steps-live">
-      {sortedSteps.map((step, idx) => {
-        const isCurrent = idx === sortedSteps.length - 1;
-        return (
-          <React.Fragment key={step.seq}>
-            <div
-              className={`thinking-step-row${isCurrent && step.status === 'in_progress' ? ' thinking-step-active' : ''}`}
-              onClick={() => step.reasoning && toggleStep(step.seq)}
-              style={{ cursor: step.reasoning ? 'pointer' : 'default' }}
-            >
-              <span className="thinking-step-icon">
-                {step.status === 'in_progress' ? (
-                  <span className="thinking-spin-icon" />
-                ) : step.status === 'error' ? (
-                  <AlertCircle size={13} style={{ color: '#ef4444' }} />
-                ) : (
-                  <CheckCircle size={13} style={{ color: '#10b981' }} />
-                )}
-              </span>
-              <span className="thinking-step-title">{step.title}</span>
-              {step.detail && <span className="thinking-step-detail">— {step.detail}</span>}
-              {step.reasoning && (
-                <ChevronDown
-                  size={10}
-                  style={{
-                    marginLeft: 'auto',
-                    flexShrink: 0,
-                    color: 'var(--text-muted)',
-                    transform: expandedSteps.has(step.seq) ? 'rotate(180deg)' : 'none',
-                    transition: 'transform 0.2s ease',
-                  }}
-                />
-              )}
-            </div>
-            {expandedSteps.has(step.seq) && step.reasoning && (
-              <div className="thinking-step-reasoning">{step.reasoning}</div>
-            )}
-          </React.Fragment>
-        );
-      })}
-    </div>
-  );
-};
 
 // ---------------------------------------------------------------------------
 // TurnMetaRow — rendered BETWEEN user bubble and assistant bubble
@@ -434,202 +297,6 @@ const AskUserBlock: React.FC<{
   );
 };
 
-// ---------------------------------------------------------------------------
-// SvgBarChart
-// ---------------------------------------------------------------------------
-
-const SvgBarChart: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
-  const data = artifact.result_data || [];
-  const enc = artifact.config?.encoding || {};
-  const xField = enc.x?.field || Object.keys(data[0] || {})[0] || '';
-  const yField = enc.y?.field || Object.keys(data[0] || {})[1] || '';
-
-  if (!data.length || !xField || !yField) {
-    return <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '12px' }}>No chart data</div>;
-  }
-
-  const values = data.map((row) => Number(row[yField]) || 0);
-  const maxVal = Math.max(...values, 1);
-  const barW = Math.min(40, Math.floor(280 / data.length) - 4);
-  const chartH = 100;
-
-  return (
-    <svg width="100%" height={chartH + 24} style={{ overflow: 'visible' }}>
-      {data.map((row, i) => {
-        const val = Number(row[yField]) || 0;
-        const barH = Math.max(2, (val / maxVal) * chartH);
-        const x = i * (barW + 4) + 2;
-        const y = chartH - barH;
-        return (
-          <g key={i}>
-            <rect x={x} y={y} width={barW} height={barH} rx={2}
-              fill="rgba(99,102,241,0.7)" />
-            <text x={x + barW / 2} y={chartH + 14} textAnchor="middle"
-              fontSize={9} fill="var(--text-muted)"
-              style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {String(row[xField]).slice(0, 5)}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
-  );
-};
-
-// ---------------------------------------------------------------------------
-// ArtifactThumb
-// ---------------------------------------------------------------------------
-
-const ARTIFACT_ICONS: Record<string, string> = {
-  chart: '📊',
-  table: '📋',
-  kpi: '💡',
-};
-
-const ArtifactThumb: React.FC<{
-  artifact: Artifact;
-  onClick: (a: Artifact) => void;
-}> = ({ artifact, onClick }) => {
-  const icon = ARTIFACT_ICONS[artifact.type] || '📄';
-  const kpiKeys = Object.keys(artifact.key_numbers || {});
-  const firstKpi = kpiKeys[0] ? artifact.key_numbers[kpiKeys[0]] : null;
-
-  return (
-    <button type="button" className="artifact-thumb" onClick={() => onClick(artifact)}>
-      <div className="artifact-thumb-icon">{icon}</div>
-      <div className="artifact-thumb-body">
-        <div className="artifact-thumb-title">{artifact.title}</div>
-        {artifact.note && <div className="artifact-thumb-note">{artifact.note}</div>}
-        {artifact.type === 'kpi' && firstKpi !== null && (
-          <div className="artifact-thumb-kpi-val">{String(firstKpi)}</div>
-        )}
-      </div>
-    </button>
-  );
-};
-
-// ---------------------------------------------------------------------------
-// ArtifactDrawer
-// ---------------------------------------------------------------------------
-
-const ArtifactDrawer: React.FC<{
-  artifact: Artifact;
-  onClose: () => void;
-}> = ({ artifact, onClose }) => {
-  type Tab = 'chart' | 'table' | 'sql' | 'kpi';
-  const availTabs: Tab[] = [];
-  if (artifact.type === 'chart') availTabs.push('chart');
-  if (artifact.type === 'kpi') availTabs.push('kpi');
-  if (artifact.result_data?.length) availTabs.push('table');
-  if (artifact.sql_query) availTabs.push('sql');
-  if (!availTabs.length) availTabs.push('table');
-
-  const [activeTab, setActiveTab] = useState<Tab>(availTabs[0]);
-  const [copiedSql, setCopiedSql] = useState(false);
-
-  const copySQL = () => {
-    navigator.clipboard.writeText(artifact.sql_query || '');
-    setCopiedSql(true);
-    setTimeout(() => setCopiedSql(false), 2000);
-  };
-
-  const tabLabel: Record<Tab, React.ReactNode> = {
-    chart: <><BarChart2 size={12} /> Chart</>,
-    table: <><List size={12} /> Table</>,
-    sql: <><Code2 size={12} /> SQL</>,
-    kpi: <><Sparkles size={12} /> KPI</>,
-  };
-
-  const kpiKeys = Object.keys(artifact.key_numbers || {});
-
-  return (
-    <div className="artifact-drawer-overlay">
-      <div className="artifact-drawer">
-        <div className="artifact-drawer-header">
-          <span className="artifact-drawer-title">{artifact.title}</span>
-          {artifact.note && <span className="artifact-drawer-note">{artifact.note}</span>}
-          <button type="button" className="artifact-drawer-close" onClick={onClose}>
-            <X size={15} />
-          </button>
-        </div>
-        <div className="artifact-drawer-tabs">
-          {availTabs.map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              className={`artifact-drawer-tab${activeTab === tab ? ' active' : ''}`}
-              onClick={() => setActiveTab(tab)}
-            >
-              {tabLabel[tab]}
-            </button>
-          ))}
-        </div>
-        <div className="artifact-drawer-content">
-          {activeTab === 'chart' && (
-            <div style={{ padding: '16px' }}>
-              <SvgBarChart artifact={artifact} />
-            </div>
-          )}
-          {activeTab === 'kpi' && (
-            <div className="artifact-kpi-view">
-              {kpiKeys.map((k) => (
-                <div key={k} className="artifact-kpi-item">
-                  <div className="artifact-kpi-label">{k}</div>
-                  <div className="artifact-kpi-main">{String(artifact.key_numbers[k])}</div>
-                </div>
-              ))}
-            </div>
-          )}
-          {activeTab === 'table' && (
-            <div className="artifact-table-view">
-              {artifact.result_data?.length ? (
-                <table className="analytics-table">
-                  <thead>
-                    <tr>
-                      {Object.keys(artifact.result_data[0]).map((h) => (
-                        <th key={h}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {artifact.result_data.map((row, i) => (
-                      <tr key={i}>
-                        {Object.values(row).map((cell, j) => (
-                          <td key={j}>{String(cell)}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <div style={{ color: 'var(--text-muted)', padding: 16, fontSize: 13 }}>No data</div>
-              )}
-            </div>
-          )}
-          {activeTab === 'sql' && (
-            <div style={{ padding: '12px', position: 'relative' }}>
-              <button
-                type="button"
-                className="btn-copy-code"
-                style={{ position: 'absolute', top: 16, right: 16 }}
-                onClick={copySQL}
-              >
-                {copiedSql ? (
-                  <><Check size={12} style={{ color: 'var(--accent-emerald)' }} />Copied</>
-                ) : (
-                  <><Copy size={12} />Copy SQL</>
-                )}
-              </button>
-              <pre className="code-block-content" style={{ marginTop: 32 }}>
-                <code>{artifact.sql_query}</code>
-              </pre>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};
 
 // ---------------------------------------------------------------------------
 // ChatArea
@@ -652,6 +319,8 @@ interface ChatAreaProps {
   onAskUserResponse?: (turnId: string, answer: string, modelId: string) => void;
   /** Delete a turn (pass the assistant message id / turn_id) */
   onDeleteMessage?: (messageId: string) => void;
+  /** Chat input rendered below messages, scoped to messages column only */
+  renderInput?: React.ReactNode;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -669,6 +338,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onOpenCredentials,
   onAskUserResponse,
   onDeleteMessage,
+  renderInput,
 }) => {
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
@@ -711,7 +381,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     if (!onDeleteMessage || deletingMsgId) return;
     // UUID validation — guard against local placeholder ids like "msg-assistant-XXXX"
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    const isValidUUID = UUID_RE.test(msgId);
     // Also accept historical prefixed ids like "hist-asst-{uuid}"
     const cleanId = msgId.startsWith('hist-asst-') ? msgId.replace('hist-asst-', '') : msgId;
     if (!UUID_RE.test(cleanId)) {
@@ -808,327 +477,335 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       </header>
 
-      {/* Messages */}
-      <div className="chat-messages-container">
-        {messages.length === 0 ? (
-          <div className="empty-state-wrap">
-            <div className="empty-logo-glow">
-              <LogoEmblem size={44} />
-            </div>
-            <h1 className="empty-heading">What decision are we analyzing today?</h1>
-            <p className="empty-subtext">
-              Welcome to <span className="kannada-accent-pill">Nirnaya</span>. Ask complex
-              business questions, inspect uploaded data files, or simulate strategic decisions
-              across <strong style={{ color: '#ffffff' }}>{currentProject?.title || 'your datasets'}</strong>.
-            </p>
-            {isDataLoaded && availableModels.length === 0 && (
-              <div
-                style={{
-                  display: 'flex', alignItems: 'center', gap: '12px',
-                  background: 'rgba(245, 158, 11, 0.08)',
-                  border: '1px solid rgba(245, 158, 11, 0.25)',
-                  borderRadius: '10px', padding: '10px 16px',
-                  margin: '0 auto 20px', maxWidth: '560px',
-                  fontSize: '12.5px', color: '#fbbf24',
-                }}
-              >
-                <KeyRound size={18} style={{ flexShrink: 0, color: '#f59e0b' }} />
-                <span style={{ flex: 1, textAlign: 'left', lineHeight: 1.4, color: '#e2e8f0' }}>
-                  No AI models configured yet. Add your Anthropic or OpenAI API key to start querying your data.
-                </span>
-                {onOpenCredentials && (
-                  <button
-                    type="button"
-                    onClick={onOpenCredentials}
-                    style={{
-                      padding: '6px 12px', background: '#4f46e5', color: '#ffffff',
-                      borderRadius: '6px', fontSize: '11.5px', fontWeight: 600,
-                      cursor: 'pointer', whiteSpace: 'nowrap', border: 'none',
-                    }}
-                  >
-                    Add API Key
-                  </button>
-                )}
+      {/* Body row: messages + artifact side panel */}
+      <div className="chat-body-row">
+        {/* Messages column — scoped left of artifact panel */}
+        <div className="chat-messages-col">
+        <div className="chat-messages-container">
+          <div className="chat-messages-inner">
+          {messages.length === 0 ? (
+            <div className="empty-state-wrap">
+              <div className="empty-logo-glow">
+                <LogoEmblem size={44} />
               </div>
-            )}
-            <div className="starter-prompts-grid">
-              {starterPrompts.map((item, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  className="prompt-card-btn"
-                  onClick={() => onSendSuggestedPrompt(item.prompt)}
+              <h1 className="empty-heading">What decision are we analyzing today?</h1>
+              <p className="empty-subtext">
+                Welcome to <span className="kannada-accent-pill">Nirnaya</span>. Ask complex
+                business questions, inspect uploaded data files, or simulate strategic decisions
+                across <strong style={{ color: '#ffffff' }}>{currentProject?.title || 'your datasets'}</strong>.
+              </p>
+              {isDataLoaded && availableModels.length === 0 && (
+                <div
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '12px',
+                    background: 'rgba(245, 158, 11, 0.08)',
+                    border: '1px solid rgba(245, 158, 11, 0.25)',
+                    borderRadius: '10px', padding: '10px 16px',
+                    margin: '0 auto 20px', maxWidth: '560px',
+                    fontSize: '12.5px', color: '#fbbf24',
+                  }}
                 >
-                  <div className="prompt-card-header"><span>{item.title}</span></div>
-                  <div className="prompt-card-desc">{item.desc}</div>
-                </button>
-              ))}
+                  <KeyRound size={18} style={{ flexShrink: 0, color: '#f59e0b' }} />
+                  <span style={{ flex: 1, textAlign: 'left', lineHeight: 1.4, color: '#e2e8f0' }}>
+                    No AI models configured yet. Add your Anthropic or OpenAI API key to start querying your data.
+                  </span>
+                  {onOpenCredentials && (
+                    <button
+                      type="button"
+                      onClick={onOpenCredentials}
+                      style={{
+                        padding: '6px 12px', background: '#4f46e5', color: '#ffffff',
+                        borderRadius: '6px', fontSize: '11.5px', fontWeight: 600,
+                        cursor: 'pointer', whiteSpace: 'nowrap', border: 'none',
+                      }}
+                    >
+                      Add API Key
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="starter-prompts-grid">
+                {starterPrompts.map((item, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    className="prompt-card-btn"
+                    onClick={() => onSendSuggestedPrompt(item.prompt)}
+                  >
+                    <div className="prompt-card-header"><span>{item.title}</span></div>
+                    <div className="prompt-card-desc">{item.desc}</div>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-        ) : (
-          messages.map((msg, idx) => {
-            const isLast = idx === messages.length - 1;
-            const isUser = msg.role === 'user';
+          ) : (
+            messages.map((msg, idx) => {
+              const isLast = idx === messages.length - 1;
+              const isUser = msg.role === 'user';
 
-            if (isUser) {
-              // Find the paired assistant message (next message after this user one)
-              const nextMsg = messages[idx + 1];
-              const pairedAssistantId = nextMsg?.role === 'assistant' ? nextMsg.id : null;
-              const isMenuOpen = openMenuMsgId === pairedAssistantId;
-              const isThisDeleting = pairedAssistantId ? deletingMsgId === pairedAssistantId : false;
+              if (isUser) {
+                // Find the paired assistant message (next message after this user one)
+                const nextMsg = messages[idx + 1];
+                const pairedAssistantId = nextMsg?.role === 'assistant' ? nextMsg.id : null;
+                const isMenuOpen = openMenuMsgId === pairedAssistantId;
+                const isThisDeleting = pairedAssistantId ? deletingMsgId === pairedAssistantId : false;
+
+                return (
+                  <div key={msg.id} className="message-row message-row-user" style={{ alignItems: 'flex-start', gap: '8px' }}>
+                    {/* 3-dot menu — sits to the LEFT of the bubble (before it in RTL layout), outside */}
+                    {onDeleteMessage && pairedAssistantId && (
+                      <div
+                        ref={isMenuOpen ? menuRef : undefined}
+                        style={{ position: 'relative', flexShrink: 0, alignSelf: 'flex-start', marginTop: '8px' }}
+                      >
+                        <button
+                          type="button"
+                          title="Message options"
+                          onClick={() => setOpenMenuMsgId(isMenuOpen ? null : pairedAssistantId)}
+                          style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            color: 'var(--text-muted)', padding: '4px', borderRadius: '5px',
+                            display: 'flex', alignItems: 'center',
+                            opacity: isMenuOpen ? 1 : 0.5,
+                            transition: 'opacity 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                          onMouseLeave={(e) => (e.currentTarget.style.opacity = isMenuOpen ? '1' : '0.5')}
+                        >
+                          <MoreVertical size={15} />
+                        </button>
+                        {/* Dropdown */}
+                        {isMenuOpen && (
+                          <div
+                            style={{
+                              position: 'absolute', right: 0, top: '28px',
+                              background: 'var(--bg-secondary, #1e2a3a)',
+                              border: '1px solid rgba(255,255,255,0.1)',
+                              borderRadius: '8px', boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+                              minWidth: '160px', zIndex: 100, overflow: 'hidden',
+                              padding: '4px',
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteMsg(pairedAssistantId)}
+                              disabled={isThisDeleting}
+                              style={{
+                                display: 'flex', alignItems: 'center', gap: '8px',
+                                width: '100%', padding: '8px 10px',
+                                background: 'none', border: 'none',
+                                borderRadius: '6px',
+                                color: '#f87171', cursor: isThisDeleting ? 'not-allowed' : 'pointer',
+                                fontSize: '12.5px', fontWeight: 500,
+                                transition: 'background 0.15s ease',
+                              }}
+                              onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(239,68,68,0.12)')}
+                              onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                            >
+                              <Trash2 size={13} />
+                              <span>{isThisDeleting ? 'Deleting…' : 'Delete this turn'}</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="message-bubble-user-wrap" style={{ flex: 1 }}>
+                      <div className="user-bubble">
+                        <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{msg.content}</p>
+                        {msg.files && msg.files.length > 0 && (
+                          <div className="user-attachments-container">
+                            {msg.files.map((file) => (
+                              <span key={file.id} className="attachment-tag">
+                                {file.extension === 'csv' || file.extension === 'xlsx' ? (
+                                  <FileSpreadsheet size={12} />
+                                ) : (
+                                  <FileText size={12} />
+                                )}
+                                <span>{file.name}</span>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="message-meta-right">
+                        <Clock size={11} />
+                        <span>{msg.timestamp}</span>
+                        <span>• You</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+
+              // Assistant message — wrap in Fragment so TurnMetaRow is a sibling
+              const hasContent = Boolean(msg.content);
+              const hasSteps = Boolean(msg.steps && msg.steps.length > 0);
+              const isThisLoading = isLoading && isLast;
+              const freshArtifacts = (msg.artifacts || []).filter((a) => a.status === 'fresh');
+              const followUps = msg.followUpQuestions || [];
+
+              // During streaming: TurnMetaRow handles the live step display.
+              // Hide the full logo+bubble until we have final content.
+              const showAssistantBubble = hasContent || (!isThisLoading && (hasSteps || freshArtifacts.length > 0));
 
               return (
-                <div key={msg.id} className="message-row message-row-user" style={{ alignItems: 'flex-start', gap: '8px' }}>
-                  {/* 3-dot menu — sits to the LEFT of the bubble (before it in RTL layout), outside */}
-                  {onDeleteMessage && pairedAssistantId && (
-                    <div
-                      ref={isMenuOpen ? menuRef : undefined}
-                      style={{ position: 'relative', flexShrink: 0, alignSelf: 'flex-start', marginTop: '8px' }}
-                    >
-                      <button
-                        type="button"
-                        title="Message options"
-                        onClick={() => setOpenMenuMsgId(isMenuOpen ? null : pairedAssistantId)}
-                        style={{
-                          background: 'none', border: 'none', cursor: 'pointer',
-                          color: 'var(--text-muted)', padding: '4px', borderRadius: '5px',
-                          display: 'flex', alignItems: 'center',
-                          opacity: isMenuOpen ? 1 : 0.5,
-                          transition: 'opacity 0.15s ease',
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
-                        onMouseLeave={(e) => (e.currentTarget.style.opacity = isMenuOpen ? '1' : '0.5')}
-                      >
-                        <MoreVertical size={15} />
-                      </button>
-                      {/* Dropdown */}
-                      {isMenuOpen && (
-                        <div
-                          style={{
-                            position: 'absolute', right: 0, top: '28px',
-                            background: 'var(--bg-secondary, #1e2a3a)',
-                            border: '1px solid rgba(255,255,255,0.1)',
-                            borderRadius: '8px', boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-                            minWidth: '160px', zIndex: 100, overflow: 'hidden',
-                            padding: '4px',
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteMsg(pairedAssistantId)}
-                            disabled={isThisDeleting}
-                            style={{
-                              display: 'flex', alignItems: 'center', gap: '8px',
-                              width: '100%', padding: '8px 10px',
-                              background: 'none', border: 'none',
-                              borderRadius: '6px',
-                              color: '#f87171', cursor: isThisDeleting ? 'not-allowed' : 'pointer',
-                              fontSize: '12.5px', fontWeight: 500,
-                              transition: 'background 0.15s ease',
-                            }}
-                            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(239,68,68,0.12)')}
-                            onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
-                          >
-                            <Trash2 size={13} />
-                            <span>{isThisDeleting ? 'Deleting…' : 'Delete this turn'}</span>
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                <React.Fragment key={msg.id}>
+                  {/* TurnMetaRow sits BETWEEN user bubble and assistant bubble */}
+                  <TurnMetaRow msg={msg} isLast={isLast} isLoading={isLoading} />
+
+                  {/* ask_user interrupt block */}
+                  {msg.askUser && onAskUserResponse && (
+                    <AskUserBlock
+                      askUser={msg.askUser}
+                      onResponse={onAskUserResponse}
+                      modelId={selectedModelId}
+                    />
                   )}
 
-                  <div className="message-bubble-user-wrap" style={{ flex: 1 }}>
-                    <div className="user-bubble">
-                      <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{msg.content}</p>
-                      {msg.files && msg.files.length > 0 && (
-                        <div className="user-attachments-container">
-                          {msg.files.map((file) => (
-                            <span key={file.id} className="attachment-tag">
-                              {file.extension === 'csv' || file.extension === 'xlsx' ? (
-                                <FileSpreadsheet size={12} />
-                              ) : (
-                                <FileText size={12} />
-                              )}
-                              <span>{file.name}</span>
-                            </span>
-                          ))}
+                  {/* Assistant bubble — only rendered once we have actual content */}
+                  {showAssistantBubble && (
+                    <div className="message-row message-row-assistant">
+                      <div className="message-bubble-assistant-wrap">
+                        <div className="assistant-avatar" title="Nirnaya Analytics Agent">
+                          <LogoEmblem size={22} />
                         </div>
-                      )}
-                    </div>
-                    <div className="message-meta-right">
-                      <Clock size={11} />
-                      <span>{msg.timestamp}</span>
-                      <span>• You</span>
-                    </div>
-                  </div>
-                </div>
-              );
-            }
+                        <div className="assistant-content-box">
+                          <div className="assistant-bubble">
+                            {/* Final answer */}
+                            {hasContent && <MarkdownContent text={msg.content} />}
 
-            // Assistant message — wrap in Fragment so TurnMetaRow is a sibling
-            const hasContent = Boolean(msg.content);
-            const hasSteps = Boolean(msg.steps && msg.steps.length > 0);
-            const isThisLoading = isLoading && isLast;
-            const freshArtifacts = (msg.artifacts || []).filter((a) => a.status === 'fresh');
-            const followUps = msg.followUpQuestions || [];
-
-            // During streaming: TurnMetaRow handles the live step display.
-            // Hide the full logo+bubble until we have final content.
-            const showAssistantBubble = hasContent || (!isThisLoading && (hasSteps || freshArtifacts.length > 0));
-
-            return (
-              <React.Fragment key={msg.id}>
-                {/* TurnMetaRow sits BETWEEN user bubble and assistant bubble */}
-                <TurnMetaRow msg={msg} isLast={isLast} isLoading={isLoading} />
-
-                {/* ask_user interrupt block */}
-                {msg.askUser && onAskUserResponse && (
-                  <AskUserBlock
-                    askUser={msg.askUser}
-                    onResponse={onAskUserResponse}
-                    modelId={selectedModelId}
-                  />
-                )}
-
-                {/* Assistant bubble — only rendered once we have actual content */}
-                {showAssistantBubble && (
-                  <div className="message-row message-row-assistant">
-                    <div className="message-bubble-assistant-wrap">
-                      <div className="assistant-avatar" title="Nirnaya Analytics Agent">
-                        <LogoEmblem size={22} />
-                      </div>
-                      <div className="assistant-content-box">
-                        <div className="assistant-bubble">
-                          {/* Final answer */}
-                          {hasContent && <MarkdownContent text={msg.content} />}
-
-                          {/* Legacy: SQL query block */}
-                          {msg.sqlQuery && (
-                            <div className="code-block-wrapper">
-                              <div className="code-block-header">
-                                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                  <Code2 size={13} style={{ color: 'var(--accent-cyan)' }} />
-                                  Analytical SQL Query
-                                </span>
-                                <button
-                                  type="button"
-                                  className="btn-copy-code"
-                                  onClick={() => handleCopyCode(msg.sqlQuery!, msg.id)}
-                                >
-                                  {copiedCodeId === msg.id ? (
-                                    <><Check size={12} style={{ color: 'var(--accent-emerald)' }} />Copied</>
-                                  ) : (
-                                    <><Copy size={12} />Copy SQL</>
-                                  )}
-                                </button>
-                              </div>
-                              <pre className="code-block-content"><code>{msg.sqlQuery}</code></pre>
-                            </div>
-                          )}
-
-                          {/* Legacy: Data table */}
-                          {msg.tableData && (
-                            <div className="data-table-wrapper">
-                              {msg.tableData.title && (
-                                <div className="data-table-title">
-                                  <TableIcon size={14} /><span>{msg.tableData.title}</span>
-                                </div>
-                              )}
-                              <div className="data-table-scroll">
-                                <table className="analytics-table">
-                                  <thead><tr>{msg.tableData.headers.map((h, i) => <th key={i}>{h}</th>)}</tr></thead>
-                                  <tbody>
-                                    {msg.tableData.rows.map((row, rIdx) => (
-                                      <tr key={rIdx}>{row.map((cell, cIdx) => <td key={cIdx}>{cell}</td>)}</tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Legacy: Insights */}
-                          {msg.insights && msg.insights.length > 0 && (
-                            <div>
-                              <div className="analytics-section-title">
-                                <TrendingUp size={14} /><span>Decision Insights</span>
-                              </div>
-                              <ul className="analytics-insights-list">
-                                {msg.insights.map((insight, insIdx) => (
-                                  <li key={insIdx} className="analytics-insight-item">
-                                    <span className="insight-bullet" />
-                                    <span>{insight}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-
-                          {/* Legacy: Suggestions */}
-                          {msg.suggestions && msg.suggestions.length > 0 && (
-                            <div style={{ marginTop: '14px' }}>
-                              <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '8px' }}>
-                                Suggested Follow-Ups:
-                              </div>
-                              <div className="assistant-suggestions">
-                                {msg.suggestions.map((sug, sIdx) => (
-                                  <button key={sIdx} type="button" className="suggestion-pill-btn" onClick={() => onSendSuggestedPrompt(sug)}>
-                                    <span>{sug}</span><ArrowRight size={11} />
+                            {/* Legacy: SQL query block */}
+                            {msg.sqlQuery && (
+                              <div className="code-block-wrapper">
+                                <div className="code-block-header">
+                                  <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <Code2 size={13} style={{ color: 'var(--accent-cyan)' }} />
+                                    Analytical SQL Query
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="btn-copy-code"
+                                    onClick={() => handleCopyCode(msg.sqlQuery!, msg.id)}
+                                  >
+                                    {copiedCodeId === msg.id ? (
+                                      <><Check size={12} style={{ color: 'var(--accent-emerald)' }} />Copied</>
+                                    ) : (
+                                      <><Copy size={12} />Copy SQL</>
+                                    )}
                                   </button>
-                                ))}
+                                </div>
+                                <pre className="code-block-content"><code>{msg.sqlQuery}</code></pre>
                               </div>
+                            )}
+
+                            {/* Legacy: Data table */}
+                            {msg.tableData && (
+                              <div className="data-table-wrapper">
+                                {msg.tableData.title && (
+                                  <div className="data-table-title">
+                                    <TableIcon size={14} /><span>{msg.tableData.title}</span>
+                                  </div>
+                                )}
+                                <div className="data-table-scroll">
+                                  <table className="analytics-table">
+                                    <thead><tr>{msg.tableData.headers.map((h, i) => <th key={i}>{h}</th>)}</tr></thead>
+                                    <tbody>
+                                      {msg.tableData.rows.map((row, rIdx) => (
+                                        <tr key={rIdx}>{row.map((cell, cIdx) => <td key={cIdx}>{cell}</td>)}</tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Legacy: Insights */}
+                            {msg.insights && msg.insights.length > 0 && (
+                              <div>
+                                <div className="analytics-section-title">
+                                  <TrendingUp size={14} /><span>Decision Insights</span>
+                                </div>
+                                <ul className="analytics-insights-list">
+                                  {msg.insights.map((insight, insIdx) => (
+                                    <li key={insIdx} className="analytics-insight-item">
+                                      <span className="insight-bullet" />
+                                      <span>{insight}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            {/* Legacy: Suggestions */}
+                            {msg.suggestions && msg.suggestions.length > 0 && (
+                              <div style={{ marginTop: '14px' }}>
+                                <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                                  Suggested Follow-Ups:
+                                </div>
+                                <div className="assistant-suggestions">
+                                  {msg.suggestions.map((sug, sIdx) => (
+                                    <button key={sIdx} type="button" className="suggestion-pill-btn" onClick={() => onSendSuggestedPrompt(sug)}>
+                                      <span>{sug}</span><ArrowRight size={11} />
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Artifact thumbnails */}
+                          {freshArtifacts.length > 0 && (
+                            <div className="artifact-thumbs-row">
+                              {freshArtifacts.map((a, ai) => (
+                                <ArtifactMiniPreview key={a.artifact_id} artifact={a} onClick={setDrawerArtifact} index={ai} />
+                              ))}
                             </div>
                           )}
-                        </div>
 
-                        {/* Artifact thumbnails */}
-                        {freshArtifacts.length > 0 && (
-                          <div className="artifact-thumbs-row">
-                            {freshArtifacts.map((a) => (
-                              <ArtifactThumb key={a.artifact_id} artifact={a} onClick={setDrawerArtifact} />
-                            ))}
+                          {/* Follow-up chips — only on the last assistant message */}
+                          {followUps.length > 0 && isLast && (
+                            <div className="followup-chips-row">
+                              <span className="followup-chips-label">Follow up</span>
+                              {followUps.map((q, qi) => (
+                                <button
+                                  key={qi}
+                                  type="button"
+                                  className="suggestion-pill-btn"
+                                  onClick={() => onSendSuggestedPrompt(q)}
+                                >
+                                  <span>{q}</span>
+                                  <ArrowRight size={11} />
+                                </button>
+                              ))}
+                            </div>
+                          )}
+
+                          <div className="assistant-meta-left">
+                            <Clock size={11} />
+                            <span>{msg.timestamp}</span>
+                            <span>• Nirnaya Agent</span>
+                            {msg.model && <span className="assistant-model-tag">{msg.model}</span>}
                           </div>
-                        )}
-
-                        {/* Follow-up chips — only on the last assistant message */}
-                        {followUps.length > 0 && isLast && (
-                          <div className="followup-chips-row">
-                            <span className="followup-chips-label">Follow up</span>
-                            {followUps.map((q, qi) => (
-                              <button
-                                key={qi}
-                                type="button"
-                                className="suggestion-pill-btn"
-                                onClick={() => onSendSuggestedPrompt(q)}
-                              >
-                                <span>{q}</span>
-                                <ArrowRight size={11} />
-                              </button>
-                            ))}
-                          </div>
-                        )}
-
-                        <div className="assistant-meta-left">
-                          <Clock size={11} />
-                          <span>{msg.timestamp}</span>
-                          <span>• Nirnaya Agent</span>
-                          {msg.model && <span className="assistant-model-tag">{msg.model}</span>}
                         </div>
                       </div>
                     </div>
-                  </div>
-                )}
-              </React.Fragment>
-            );
-          })
-        )}
-        <div ref={scrollEndRef} />
-      </div>
+                  )}
+                </React.Fragment>
+              );
+            })
+          )}
+          <div ref={scrollEndRef} />
+          </div>{/* end chat-messages-inner */}
+        </div>{/* end chat-messages-container */}
+        {renderInput}
+        </div>{/* end chat-messages-col */}
 
-      {/* Artifact drawer overlay */}
-      {drawerArtifact && (
-        <ArtifactDrawer artifact={drawerArtifact} onClose={() => setDrawerArtifact(null)} />
-      )}
+        {/* Artifact side panel — beside messages column only */}
+        {drawerArtifact && (
+          <ArtifactSidePanel artifact={drawerArtifact} onClose={() => setDrawerArtifact(null)} />
+        )}
+      </div>{/* end chat-body-row */}
     </div>
   );
 };

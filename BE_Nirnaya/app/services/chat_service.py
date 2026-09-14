@@ -1,4 +1,4 @@
-
+﻿
 """
 app/services/chat_service.py
 -----------------------------
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS public.artifacts (
     session_id    TEXT NOT NULL,
     database_id   UUID REFERENCES public.databases(id) ON DELETE CASCADE,
     project_id    UUID REFERENCES public.projects(id) ON DELETE CASCADE,
-    message_id    UUID REFERENCES public.chat_messages(id) ON DELETE SET NULL,
+    message_id    UUID REFERENCES public.chat_messages(id) ON DELETE CASCADE,
     type          TEXT NOT NULL CHECK (type IN ('kpi', 'chart', 'table')),
     title         TEXT NOT NULL,
     sql_query     TEXT NOT NULL,

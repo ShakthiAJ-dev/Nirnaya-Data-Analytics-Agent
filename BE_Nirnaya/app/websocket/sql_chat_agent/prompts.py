@@ -180,6 +180,92 @@ All SQL must use: {schema_name}.table_name
 - You MUST call a finalize tool to complete your task. Do not just explain.
 {chart_hint}
 
+━━━ ARTIFACT CONTRACT RULES (MANDATORY — follow exactly, FE renders strictly from these) ━━━
+
+─── CHART CONTRACTS ───────────────────────────────────────────────────────────
+
+chart_family "cartesian_xy" valid chart_types and REQUIRED encoding fields:
+  line         → x (required) + y (required) + series (optional)
+  bar          → x (required) + y (required) + series (optional)
+  grouped_bar  → x (required) + y (required) + series (REQUIRED — the grouping dimension)
+  stacked_bar  → x (required) + y (required) + series (REQUIRED — the grouping dimension)
+  area         → x (required) + y (required) + series (optional)
+  scatter      → x (required) + y (required) + series (optional)
+  bubble       → x (required) + y (required) + size (REQUIRED — numeric field for bubble radius)
+  histogram    → x (required — the numeric column to bin) + y omit
+  box_plot     → x (required — category) + y (required — numeric distribution column)
+
+chart_family "part_to_whole" valid chart_types:
+  donut        → category (required) + value (required); x and y MUST be null/omitted
+  treemap      → category (required) + value (required); x and y MUST be null/omitted
+
+chart_family "sequential_delta" valid chart_types:
+  waterfall    → x (required — label/category column) + y (required — signed numeric delta)
+
+chart_family "category_matrix" valid chart_types:
+  heatmap      → x (required — row dimension) + y (required — column dimension) + value (required — cell metric)
+
+chart_family "flow_conversion" valid chart_types:
+  funnel       → category (required — stage name) + value (required — count or rate per stage)
+                 x and y MUST be null/omitted
+
+chart_config display hints (always populate):
+  orientation      : "horizontal" when bar chart has > 6 categories or long labels, else "vertical"
+  show_legend      : false when chart has only one series
+  show_data_labels : true for donut, waterfall, funnel, and bar charts with ≤ 8 bars; else false
+  sort_order       : "desc" for bar/donut/funnel ranked by value; "none" for time-series
+  stack_type       : "percent" ONLY for stacked_bar when showing proportional breakdown
+  line_style       : "dashed" for forecast/projected lines; "solid" otherwise
+  fill_opacity     : 0.15 to 0.3 for area charts; omit for others
+  x_axis_label     : human-readable label (e.g. "Month", "Product Category")
+  y_axis_label     : human-readable label (e.g. "Revenue (USD)", "# of Users")
+
+─── KPI CONTRACTS ─────────────────────────────────────────────────────────────
+
+card_type "single_value":
+  key_numbers = {{ "value": <number> }}
+  Use for: simple aggregations (SUM, COUNT, AVG, MAX) without comparison
+
+card_type "value_with_delta":
+  key_numbers = {{ "value": <number>, "delta_pct": <signed float>, "delta_abs": <float|null> }}
+  Use for: current period vs previous period comparisons
+  delta_pct is SIGNED — positive = growth, negative = decline (e.g. 5.2 means +5.2%)
+
+card_type "value_with_target":
+  key_numbers = {{ "value": <number>, "target": <number>, "delta_pct": <signed float|null> }}
+  Use for: progress toward a goal or quota
+  delta_pct = ((value - target) / target) * 100  (positive = above target, negative = below)
+
+format rules:
+  currency : use when the value is a monetary amount (revenue, cost, profit)
+  percent  : use when the value is already a rate or ratio (e.g. conversion rate, margin %)
+  number   : use for counts, integers, plain numeric metrics
+
+display_config (ALWAYS populate for professional UI):
+  prefix           : "$" for currency, "€" / "£" if currency from metadata says so; "" otherwise
+  suffix           : "%" for percent format; "K"/"M"/"B" if value is in thousands/millions/billions
+  decimal_places   : 0 for counts and integers; 2 for currency, rates, ratios
+  trend_direction  : "up_is_good" for revenue/growth/NPS; "down_is_good" for cost/churn/errors
+  comparison_label : e.g. "vs last month", "vs Q1 2023", "vs target"; omit for single_value
+  color_theme      : "positive" if confirmed above target/trend; "negative" if below; "warning" if near threshold; "default" otherwise
+
+─── TABLE CONTRACTS ───────────────────────────────────────────────────────────
+
+For EACH column in the query result, define:
+  field      : exact column name from SQL result (case-sensitive)
+  label      : human-readable Title Case label
+  format     : currency | number | percent | date | null
+  align      : omit to use auto-defaults (right for numeric, left for text, center for date)
+  sortable   : false only for computed labels or decorative columns; true for everything else
+  width_hint : xs for id/code columns; sm for short numbers; md for most; lg for descriptions; xl for URLs/long text
+
+table_config (always populate for analytical tables):
+  default_sort_column    : the primary metric column (usually the most important number)
+  default_sort_direction : "desc" for rankings/leaderboards; "asc" for time-ordered data
+  show_row_numbers       : true for leaderboard / ranked tables
+  enable_search          : true for reference/lookup tables with > 20 rows
+  page_size              : 25 for tables with > 50 rows; null for small result sets
+
 ━━━ REASONING REQUIREMENT (MANDATORY) ━━━
 Before EVERY tool call (run_sql AND finalize) output a structured preamble in EXACTLY this format:
 

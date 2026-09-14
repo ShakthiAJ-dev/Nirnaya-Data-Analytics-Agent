@@ -117,11 +117,11 @@ function App() {
               prev.map((p) =>
                 p.id === projectId
                   ? {
-                      ...p,
-                      messages: (p.messages || []).map((m) =>
-                        m.id === placeholderId ? { ...m, id: realId } : m
-                      ),
-                    }
+                    ...p,
+                    messages: (p.messages || []).map((m) =>
+                      m.id === placeholderId ? { ...m, id: realId } : m
+                    ),
+                  }
                   : p
               )
             );
@@ -142,19 +142,19 @@ function App() {
             prev.map((p) =>
               p.id === projectId
                 ? {
-                    ...p,
-                    messages: (p.messages || []).map((m) =>
-                      m.id === placeholderId
-                        ? {
-                            ...m,
-                            steps: [
-                              ...(m.steps || []).filter((s) => s.seq !== stepEvent.seq),
-                              stepEvent,
-                            ].sort((a, b) => a.seq - b.seq),
-                          }
-                        : m
-                    ),
-                  }
+                  ...p,
+                  messages: (p.messages || []).map((m) =>
+                    m.id === placeholderId
+                      ? {
+                        ...m,
+                        steps: [
+                          ...(m.steps || []).filter((s) => s.seq !== stepEvent.seq),
+                          stepEvent,
+                        ].sort((a, b) => a.seq - b.seq),
+                      }
+                      : m
+                  ),
+                }
                 : p
             )
           );
@@ -171,11 +171,11 @@ function App() {
             prev.map((p) =>
               p.id === projectId
                 ? {
-                    ...p,
-                    messages: (p.messages || []).map((m) =>
-                      m.id === placeholderId ? { ...m, askUser: askEvent } : m
-                    ),
-                  }
+                  ...p,
+                  messages: (p.messages || []).map((m) =>
+                    m.id === placeholderId ? { ...m, askUser: askEvent } : m
+                  ),
+                }
                 : p
             )
           );
@@ -210,22 +210,22 @@ function App() {
             prev.map((p) =>
               p.id === projectId
                 ? {
-                    ...p,
-                    messages: (p.messages || []).map((m) =>
-                      m.id === placeholderId
-                        ? {
-                            ...m,
-                            content: finalEvent.markdown || m.content,
-                            isStreaming: false,
-                            thinkingSeconds,
-                            executionTimeMs: finalEvent.execution_time_ms,
-                            artifacts: freshArtifacts,
-                            followUpQuestions: finalEvent.follow_up_questions || [],
-                            askUser: undefined,
-                          }
-                        : m
-                    ),
-                  }
+                  ...p,
+                  messages: (p.messages || []).map((m) =>
+                    m.id === placeholderId
+                      ? {
+                        ...m,
+                        content: finalEvent.markdown || m.content,
+                        isStreaming: false,
+                        thinkingSeconds,
+                        executionTimeMs: finalEvent.execution_time_ms,
+                        artifacts: freshArtifacts,
+                        followUpQuestions: finalEvent.follow_up_questions || [],
+                        askUser: undefined,
+                      }
+                      : m
+                  ),
+                }
                 : p
             )
           );
@@ -254,13 +254,13 @@ function App() {
           prev.map((p) =>
             p.id === projectId
               ? {
-                  ...p,
-                  messages: (p.messages || []).map((m) =>
-                    m.id === placeholderId
-                      ? { ...m, content: (m.content || '') + (frame.content || '') }
-                      : m
-                  ),
-                }
+                ...p,
+                messages: (p.messages || []).map((m) =>
+                  m.id === placeholderId
+                    ? { ...m, content: (m.content || '') + (frame.content || '') }
+                    : m
+                ),
+              }
               : p
           )
         );
@@ -271,19 +271,19 @@ function App() {
           prev.map((p) =>
             p.id === projectId
               ? {
-                  ...p,
-                  messages: (p.messages || []).map((m) =>
-                    m.id === placeholderId
-                      ? {
-                          ...m,
-                          content: m.content || '',
-                          isStreaming: false,
-                          sqlQuery: (frame as any).sql_query,
-                          tableData: (frame as any).table_data,
-                        }
-                      : m
-                  ),
-                }
+                ...p,
+                messages: (p.messages || []).map((m) =>
+                  m.id === placeholderId
+                    ? {
+                      ...m,
+                      content: m.content || '',
+                      isStreaming: false,
+                      sqlQuery: (frame as any).sql_query,
+                      tableData: (frame as any).table_data,
+                    }
+                    : m
+                ),
+              }
               : p
           )
         );
@@ -685,13 +685,13 @@ function App() {
           prev.map((p) =>
             p.id === targetProjectId
               ? {
-                  ...p,
-                  messages: (p.messages || []).map((m) =>
-                    m.id === placeholderId
-                      ? { ...m, content: '*(WebSocket is not connected — please refresh.)*', isStreaming: false }
-                      : m
-                  ),
-                }
+                ...p,
+                messages: (p.messages || []).map((m) =>
+                  m.id === placeholderId
+                    ? { ...m, content: '*(WebSocket is not connected — please refresh.)*', isStreaming: false }
+                    : m
+                ),
+              }
               : p
           )
         );
@@ -703,13 +703,13 @@ function App() {
         prev.map((p) =>
           p.id === targetProjectId
             ? {
-                ...p,
-                messages: (p.messages || []).map((m) =>
-                  m.id === placeholderId
-                    ? { ...m, content: '*(Error sending message — please try again.)*', isStreaming: false }
-                    : m
-                ),
-              }
+              ...p,
+              messages: (p.messages || []).map((m) =>
+                m.id === placeholderId
+                  ? { ...m, content: '*(Error sending message — please try again.)*', isStreaming: false }
+                  : m
+              ),
+            }
             : p
         )
       );
@@ -761,42 +761,36 @@ function App() {
         onGoHome={handleGoHome}
       />
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'row', height: '100%', position: 'relative' }}>
-        {/* Left: Chat + Input */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ flex: 1, overflow: 'auto' }}>
-              <ChatArea
-                currentProject={chatAreaProject as any}
-                currentProjectId={currentProjectId}
-                messages={activeMessages}
-                selectedModelId={selectedModelId}
-                isLoading={isLoading || isLoadingData}
-                isDataLoaded={isDataLoaded}
-                pendingDatabaseName={pendingDatabaseName}
-                availableDatabasesForPicker={databases}
-                onSelectDatabase={handleSelectDatabase}
-                onSendSuggestedPrompt={(suggested) => handleSendMessage(suggested, [], selectedModelId)}
-                availableModels={availableModels}
-                onOpenCredentials={() => setIsCredentialsModalOpen(true)}
-                onAskUserResponse={handleAskUserResponse}
-                onDeleteMessage={handleDeleteMessage}
-              />
-            </div>
-          </div>
-
-          <ChatInput
-            onSendMessage={handleSendMessage}
-            selectedModelId={selectedModelId}
-            onSelectModel={(modelId) => setSelectedModelId(modelId)}
-            isLoading={isLoading}
-            isDataLoaded={isDataLoaded}
-            availableModels={availableModels}
-            onOpenCredentials={() => setIsCredentialsModalOpen(true)}
-            noDatabaseSelected={pendingDatabaseId === null}
-            onAddDemo={handleOpenDemoModal}
-          />
-        </div>
+      <div style={{ flex: 1, display: 'flex', minWidth: 0, overflow: 'hidden' }}>
+        <ChatArea
+          currentProject={chatAreaProject as any}
+          currentProjectId={currentProjectId}
+          messages={activeMessages}
+          selectedModelId={selectedModelId}
+          isLoading={isLoading || isLoadingData}
+          isDataLoaded={isDataLoaded}
+          pendingDatabaseName={pendingDatabaseName}
+          availableDatabasesForPicker={databases}
+          onSelectDatabase={handleSelectDatabase}
+          onSendSuggestedPrompt={(suggested) => handleSendMessage(suggested, [], selectedModelId)}
+          availableModels={availableModels}
+          onOpenCredentials={() => setIsCredentialsModalOpen(true)}
+          onAskUserResponse={handleAskUserResponse}
+          onDeleteMessage={handleDeleteMessage}
+          renderInput={
+            <ChatInput
+              onSendMessage={handleSendMessage}
+              selectedModelId={selectedModelId}
+              onSelectModel={(modelId) => setSelectedModelId(modelId)}
+              isLoading={isLoading}
+              isDataLoaded={isDataLoaded}
+              availableModels={availableModels}
+              onOpenCredentials={() => setIsCredentialsModalOpen(true)}
+              noDatabaseSelected={pendingDatabaseId === null}
+              onAddDemo={handleOpenDemoModal}
+            />
+          }
+        />
       </div>
 
       <CredentialsModal
