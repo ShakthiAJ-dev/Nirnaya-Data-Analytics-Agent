@@ -7,6 +7,7 @@ import { NewProjectModal } from './components/NewProjectModal';
 import { NewDatabaseModal } from './components/NewDatabaseModal';
 import { DemoInitModal } from './components/DemoInitModal';
 import { DeleteDatabaseModal } from './components/DeleteDatabaseModal';
+import { DeleteProjectModal } from './components/DeleteProjectModal';
 import type {
   Project,
   Database,
@@ -47,6 +48,9 @@ function App() {
   const [isCredentialsModalOpen, setIsCredentialsModalOpen] = useState(false);
   const [isDemoModalOpen, setIsDemoModalOpen] = useState(false);
   const [deleteDatabaseId, setDeleteDatabaseId] = useState<string | null>(null);
+  // Project delete confirmation modal state
+  const [deleteProjectId, setDeleteProjectId] = useState<string | null>(null);
+  const [isDeleteProjectBusy, setIsDeleteProjectBusy] = useState(false);
 
   const [uploadTargetDbId, setUploadTargetDbId] = useState<string | null>(null);
   const sidebarUploadRef = useRef<HTMLInputElement | null>(null);
@@ -102,6 +106,29 @@ function App() {
         activeTurnIdRef.current = ackFrame.turn_id;
         lastSeqRef.current = -1;
         handleAckFrame(ackFrame);
+
+        // Rename the placeholder message id to the real turn_id UUID so that
+        // deleting the message later passes a valid UUID to the backend.
+        if (currentTurnContextRef.current) {
+          const { projectId, placeholderId } = currentTurnContextRef.current;
+          const realId = ackFrame.turn_id;
+          if (realId && realId !== placeholderId) {
+            setProjects((prev) =>
+              prev.map((p) =>
+                p.id === projectId
+                  ? {
+                      ...p,
+                      messages: (p.messages || []).map((m) =>
+                        m.id === placeholderId ? { ...m, id: realId } : m
+                      ),
+                    }
+                  : p
+              )
+            );
+            // Update the ref so subsequent step/final frames find the right message
+            currentTurnContextRef.current = { projectId, placeholderId: realId };
+          }
+        }
         return;
       }
 
@@ -285,7 +312,9 @@ function App() {
       });
       setDatabases(dbs);
 
-      setCurrentProjectId((cur) => cur ?? projs[0]?.id ?? null);
+      // Bug fix: do NOT auto-select a project on initial load.
+      // The user should start with no project selected (currentProjectId stays null).
+      // They explicitly click a project in the sidebar to open it.
 
       // Auto-select first database if no project is selected yet
       setPendingDatabaseId((cur) => cur ?? dbs[0]?.id ?? null);
@@ -400,6 +429,11 @@ function App() {
     );
   }, [wsClient]);
 
+  /** Logo click — go back to home (no project selected) */
+  const handleGoHome = () => {
+    setCurrentProjectId(null);
+  };
+
   const handleSelectProject = (projectId: string) => {
     setCurrentProjectId(projectId);
     const proj = projects.find((p) => p.id === projectId);
@@ -455,18 +489,54 @@ function App() {
     if (databaseId) setPendingDatabaseId(databaseId);
   };
 
-  const handleDeleteProject = async (projectId: string, e: React.MouseEvent) => {
+  /** Show the delete confirmation modal — actual delete happens in handleConfirmDeleteProject */
+  const handleDeleteProject = (projectId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    setDeleteProjectId(projectId);
+  };
+
+  const handleConfirmDeleteProject = async () => {
+    if (!deleteProjectId) return;
+    setIsDeleteProjectBusy(true);
     try {
-      await projectService.deleteProject(projectId);
-      setProjects((prev) => prev.filter((p) => p.id !== projectId));
-      if (currentProjectId === projectId) {
-        setCurrentProjectId(projects.find((p) => p.id !== projectId)?.id ?? null);
+      await projectService.deleteProject(deleteProjectId);
+      setProjects((prev) => prev.filter((p) => p.id !== deleteProjectId));
+      if (currentProjectId === deleteProjectId) {
+        setCurrentProjectId(null);
       }
+      setDeleteProjectId(null);
     } catch (err) {
       console.error('[App] Delete project failed:', err);
+    } finally {
+      setIsDeleteProjectBusy(false);
     }
   };
+
+  /** Delete a single chat turn (user+assistant pair) with cascading artifact delete */
+  const handleDeleteMessage = useCallback(async (messageId: string) => {
+    if (!currentProjectId) return;
+    // messageId is already a clean UUID (validated by ChatArea before calling here).
+    // Historical messages stored as "hist-asst-{uuid}", live messages stored as the UUID directly.
+    try {
+      await projectService.deleteMessage(currentProjectId, messageId);
+      setProjects((prev) =>
+        prev.map((p) => {
+          if (p.id !== currentProjectId) return p;
+          const msgs = p.messages || [];
+          // Match by exact id OR by the hist-asst-{uuid} prefix form
+          const assistantIdx = msgs.findIndex(
+            (m) => m.id === messageId || m.id === `hist-asst-${messageId}`
+          );
+          if (assistantIdx === -1) return p;
+          const userIdx = assistantIdx - 1;
+          const filtered = msgs.filter((_, i) => i !== assistantIdx && i !== userIdx);
+          return { ...p, messages: filtered };
+        })
+      );
+    } catch (err) {
+      console.error('[App] Delete message failed:', err);
+    }
+  }, [currentProjectId]);
 
   // ---------------------------------------------------------------------------
   // Handlers: Databases
@@ -572,17 +642,9 @@ function App() {
       );
     }
 
-    // Auto-update title on first user message
-    const targetProject = projects.find((p) => p.id === targetProjectId);
-    const isFirstMessage = !targetProject || (targetProject.messages || []).length === 0;
-    if (isFirstMessage && targetProjectId) {
-      const snippet = prompt.length > 60 ? `${prompt.substring(0, 60)}…` : prompt;
-      projectService.updateProjectTitle(targetProjectId, snippet).then((updated) => {
-        setProjects((prev) =>
-          prev.map((p) => (p.id === targetProjectId ? { ...p, title: updated.title } : p))
-        );
-      }).catch(() => { /* non-critical */ });
-    }
+    // NOTE: Do NOT update project title here via API.
+    // The BE will send a `project_title_updated` WS event on the first turn
+    // which already updates the sidebar title. See the WS frame handler above.
 
     resetStepTracking();
     setIsLoading(true);
@@ -685,6 +747,7 @@ function App() {
         credentials={credentials}
         pendingDatabaseId={pendingDatabaseId ?? undefined}
         isDataLoaded={isDataLoaded}
+        isInsideProject={currentProjectId !== null}
         onSelectProject={handleSelectProject}
         onSelectDatabase={handleSelectDatabase}
         onNewChat={() => setIsNewProjectModalOpen(true)}
@@ -695,6 +758,7 @@ function App() {
         onOpenCredentials={() => setIsCredentialsModalOpen(true)}
         onAddDemo={handleOpenDemoModal}
         onTableDeleted={handleDatabaseCreated}
+        onGoHome={handleGoHome}
       />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'row', height: '100%', position: 'relative' }}>
@@ -704,6 +768,7 @@ function App() {
             <div style={{ flex: 1, overflow: 'auto' }}>
               <ChatArea
                 currentProject={chatAreaProject as any}
+                currentProjectId={currentProjectId}
                 messages={activeMessages}
                 selectedModelId={selectedModelId}
                 isLoading={isLoading || isLoadingData}
@@ -715,6 +780,7 @@ function App() {
                 availableModels={availableModels}
                 onOpenCredentials={() => setIsCredentialsModalOpen(true)}
                 onAskUserResponse={handleAskUserResponse}
+                onDeleteMessage={handleDeleteMessage}
               />
             </div>
           </div>
@@ -727,6 +793,8 @@ function App() {
             isDataLoaded={isDataLoaded}
             availableModels={availableModels}
             onOpenCredentials={() => setIsCredentialsModalOpen(true)}
+            noDatabaseSelected={pendingDatabaseId === null}
+            onAddDemo={handleOpenDemoModal}
           />
         </div>
       </div>
@@ -762,6 +830,14 @@ function App() {
         databaseName={databases.find((d) => d.id === deleteDatabaseId)?.name}
         onConfirm={handleConfirmDeleteDatabase}
         onCancel={() => setDeleteDatabaseId(null)}
+      />
+
+      <DeleteProjectModal
+        isOpen={deleteProjectId !== null}
+        projectTitle={projects.find((p) => p.id === deleteProjectId)?.title}
+        isDeleting={isDeleteProjectBusy}
+        onConfirm={handleConfirmDeleteProject}
+        onCancel={() => !isDeleteProjectBusy && setDeleteProjectId(null)}
       />
     </div>
   );

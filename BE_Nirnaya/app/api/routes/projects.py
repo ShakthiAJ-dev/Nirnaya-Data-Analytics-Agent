@@ -3,12 +3,13 @@ app/api/routes/projects.py
 --------------------------
 Project management routes. All require Bearer token auth.
 
-POST   /api/v1/projects                             — create project
-GET    /api/v1/projects                             — list projects for session
-GET    /api/v1/projects/{project_id}                — get single project
-GET    /api/v1/projects/{project_id}/messages       — get full chat history for a project
-PATCH  /api/v1/projects/{project_id}/title          — update title
-DELETE /api/v1/projects/{project_id}                — delete project
+POST   /api/v1/projects                                    — create project
+GET    /api/v1/projects                                    — list projects for session
+GET    /api/v1/projects/{project_id}                       — get single project
+GET    /api/v1/projects/{project_id}/messages              — get full chat history for a project
+PATCH  /api/v1/projects/{project_id}/title                 — update title
+DELETE /api/v1/projects/{project_id}                       — delete project (cascades messages + artifacts)
+DELETE /api/v1/projects/{project_id}/messages/{message_id} — delete a single turn + its artifacts
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from app.core.dependencies import RedisDep, get_session_service
 from app.core.exceptions import SessionException
 from app.core.logging import get_logger
 from app.schemas.project import ProjectCreate, ProjectTitleUpdate
-from app.services.chat_service import ChatService
+from app.services.chat_service import ChatService, CHAT_MESSAGES_TABLE, ARTIFACTS_TABLE
 from app.services.project_service import ProjectService
 from app.services.session_service import verify_token
 
@@ -197,4 +198,73 @@ async def get_project_messages(project_id: str, request: Request, redis: RedisDe
                 "total": len(turns),
             },
         },
+    )
+
+
+@router.delete(
+    "/{project_id}/messages/{message_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete a single chat turn and its artifacts",
+    description=(
+        "Deletes a chat_messages row by its turn_id (message_id) and "
+        "cascades to delete all associated artifact rows. "
+        "Scoped to the authenticated session — cannot delete other sessions' data."
+    ),
+)
+async def delete_message(
+    project_id: str,
+    message_id: str,
+    request: Request,
+    redis: RedisDep,
+) -> JSONResponse:
+    """
+    Cascading delete: removes the turn row AND all artifact rows whose
+    message_id matches. The artifacts table has ON DELETE SET NULL on
+    message_id, so we explicitly delete them first before deleting the turn.
+    """
+    session_id, _ = await _require_session(request, redis)
+    supa = _supabase(request)
+
+    # Verify the project belongs to this session (ownership check)
+    await ProjectService(session_id, supa).get(project_id)
+
+    # 1. Delete artifacts linked to this message
+    try:
+        await (
+            supa.admin.table(ARTIFACTS_TABLE)
+            .delete()
+            .eq("message_id", message_id)
+            .eq("session_id", session_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning("delete_message_artifacts_failed", message_id=message_id, error=str(exc))
+        # Non-fatal — continue to delete the message row
+
+    # 2. Delete the chat_messages row itself
+    try:
+        resp = await (
+            supa.admin.table(CHAT_MESSAGES_TABLE)
+            .delete()
+            .eq("id", message_id)
+            .eq("project_id", project_id)
+            .eq("session_id", session_id)
+            .execute()
+        )
+        if not resp.data:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"success": False, "error": {"code": "NOT_FOUND", "message": "Message not found."}},
+            )
+    except Exception as exc:
+        logger.error("delete_message_failed", message_id=message_id, error=str(exc))
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"success": False, "error": {"code": "DELETE_FAILED", "message": str(exc)}},
+        )
+
+    logger.info("message_deleted", message_id=message_id, project_id=project_id, session_id=session_id)
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"success": True, "data": None, "message": "Message and associated artifacts deleted."},
     )

@@ -62,6 +62,7 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [deleteTableId, setDeleteTableId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [hoveredRow, setHoveredRow] = useState<string | null>(null);
   const previewScrollRef = useRef<HTMLDivElement>(null);
 
   const tables: [string, TableMeta][] = metadata?.tables
@@ -226,21 +227,42 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
         <div
           key={name}
           style={s.tableRow}
-          onClick={() => handleSelectTable(name)}
-          onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.02)')}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)'; setHoveredRow(name); }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.02)'; setHoveredRow(null); }}
         >
-          <TableIcon size={14} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
-          <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', flex: 1 }}>
-            {name}
-          </span>
-          <span style={s.badge('#06b6d4')}>
-            {(meta.row_count ?? 0).toLocaleString()} rows
-          </span>
-          <span style={s.badge('#818cf8')}>
-            {meta.column_count ?? 0} cols
-          </span>
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)', flexShrink: 0 }}>View →</span>
+          {/* Clickable area — navigate to detail */}
+          <div
+            style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, cursor: 'pointer', minWidth: 0 }}
+            onClick={() => handleSelectTable(name)}
+          >
+            <TableIcon size={14} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {name}
+            </span>
+            <span style={s.badge('#06b6d4')}>
+              {(meta.row_count ?? 0).toLocaleString()} rows
+            </span>
+            <span style={s.badge('#818cf8')}>
+              {meta.column_count ?? 0} cols
+            </span>
+          </div>
+          {/* Hover actions */}
+          <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0, marginLeft: '6px', visibility: hoveredRow === name ? 'visible' : 'hidden' }}>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>View →</span>
+            <button
+              type="button"
+              title="Delete this table"
+              onClick={(e) => { e.stopPropagation(); setDeleteTableId(name); }}
+              style={{
+                padding: '3px 6px', borderRadius: '5px', border: 'none',
+                background: 'rgba(239,68,68,0.12)', color: '#f87171',
+                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '3px',
+                fontSize: '11px', fontWeight: 600,
+              }}
+            >
+              <Trash2 size={11} />
+            </button>
+          </div>
         </div>
       ))}
     </>

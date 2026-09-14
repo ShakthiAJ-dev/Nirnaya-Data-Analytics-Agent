@@ -46,6 +46,11 @@ export const projectService = {
     await api.delete(`/projects/${projectId}`);
   },
 
+  /** Delete a single chat turn (message pair) and cascade-delete its artifacts. */
+  deleteMessage: async (projectId: string, messageId: string): Promise<void> => {
+    await api.delete(`/projects/${projectId}/messages/${messageId}`);
+  },
+
   getProjectMessages: async (projectId: string): Promise<HistoricalTurn[]> => {
     try {
       const res = await api.get<{ success: boolean; data: { project_id: string; turns: HistoricalTurn[]; total: number } }>(`/projects/${projectId}/messages`);

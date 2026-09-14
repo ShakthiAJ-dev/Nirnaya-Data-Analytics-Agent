@@ -10,6 +10,8 @@ import {
   Sparkles,
   Zap,
   KeyRound,
+  Database,
+  AlertTriangle,
 } from 'lucide-react';
 import type { FileAttachment } from '../types';
 import type { BackendModel } from '../hooks/useModels';
@@ -35,6 +37,10 @@ interface ChatInputProps {
   availableModels?: BackendModel[];
   /** Callback to open the LLM Credentials modal when user needs to add keys. */
   onOpenCredentials?: () => void;
+  /** True when no database has been selected yet — blocks send and shows an inline error. */
+  noDatabaseSelected?: boolean;
+  /** Open the demo database init modal — shown as a quick-action in the no-DB error banner. */
+  onAddDemo?: () => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -45,13 +51,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   isDataLoaded = false,
   availableModels = [],
   onOpenCredentials,
+  noDatabaseSelected = false,
+  onAddDemo,
 }) => {
   const [content, setContent] = useState('');
   const [stagedFiles, setStagedFiles] = useState<FileAttachment[]>([]);
   const [showModelPicker, setShowModelPicker] = useState(false);
+  const [showNoDatabaseError, setShowNoDatabaseError] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modelPickerRef = useRef<HTMLDivElement>(null);
+  const noDatabaseDismissRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const hasModels = availableModels.length > 0;
 
@@ -147,6 +157,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const handleSend = () => {
     if ((!content.trim() && stagedFiles.length === 0) || isLoading) return;
 
+    // Guard: no database selected
+    if (noDatabaseSelected) {
+      // Show the error banner and auto-dismiss after 4s
+      setShowNoDatabaseError(true);
+      if (noDatabaseDismissRef.current) clearTimeout(noDatabaseDismissRef.current);
+      noDatabaseDismissRef.current = setTimeout(() => setShowNoDatabaseError(false), 4000);
+      return;
+    }
+
     if (!hasModels) {
       if (onOpenCredentials) {
         onOpenCredentials();
@@ -173,6 +192,50 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   return (
     <div className="chat-input-wrapper">
+      {/* No-database error banner */}
+      {showNoDatabaseError && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: '10px',
+            padding: '10px 16px', marginBottom: '8px',
+            background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)',
+            borderRadius: '10px', animation: 'shake 0.4s ease',
+          }}
+        >
+          <AlertTriangle size={15} style={{ color: '#f59e0b', flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#fbbf24' }}>
+              No database selected
+            </span>
+            <span style={{ fontSize: '12px', color: 'var(--text-secondary)', marginLeft: '6px' }}>
+              Select a database from the sidebar or load the demo to start chatting.
+            </span>
+          </div>
+          {onAddDemo && (
+            <button
+              type="button"
+              onClick={() => { setShowNoDatabaseError(false); onAddDemo(); }}
+              style={{
+                padding: '5px 12px', borderRadius: '6px', border: 'none',
+                background: 'rgba(245,158,11,0.2)', color: '#fbbf24',
+                cursor: 'pointer', fontSize: '12px', fontWeight: 600,
+                display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0,
+              }}
+            >
+              <Database size={12} />
+              <span>Load Demo</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowNoDatabaseError(false)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '2px', flexShrink: 0 }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       <div className="chat-input-container">
         {/* Staged Attached Files Bar */}
         {stagedFiles.length > 0 && (
@@ -417,6 +480,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       <div className="input-footer-hint">
         Nirnaya synthesizes insights across datasets. Verify critical business calculations before finalizing decisions.
       </div>
+      <style>{`
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          15% { transform: translateX(-6px); }
+          30% { transform: translateX(6px); }
+          45% { transform: translateX(-4px); }
+          60% { transform: translateX(4px); }
+          75% { transform: translateX(-2px); }
+          90% { transform: translateX(2px); }
+        }
+      `}</style>
     </div>
   );
 };
