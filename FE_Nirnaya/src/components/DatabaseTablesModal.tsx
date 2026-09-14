@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom';
 import {
   X, ArrowLeft, Table as TableIcon, Database, Eye,
   Tag, Key, Globe, Clock, User, AlertCircle, Hash, Rows,
-  Loader2, Trash2,
+  Loader2, Trash2, RefreshCw, FileText,
 } from 'lucide-react';
 import { databaseService } from '../services/databaseService';
 import type { PreviewResponse } from '../services/databaseService';
@@ -32,7 +32,8 @@ interface DatabaseTablesModalProps {
   onTableDeleted?: () => void; // callback to refresh parent when table is deleted
 }
 
-type View = 'list' | 'detail' | 'preview';
+type View = 'list' | 'detail';
+type DetailTab = 'preview' | 'schema';
 
 const FIELD_DEFS: { key: keyof TableMeta; label: string; icon: React.ReactNode; isArray?: boolean }[] = [
   { key: 'overview', label: 'Overview', icon: <Database size={13} /> },
@@ -56,25 +57,57 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
   onTableDeleted,
 }) => {
   const [view, setView] = useState<View>('list');
+  const [detailTab, setDetailTab] = useState<DetailTab>('schema');
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  const [activeMetadata, setActiveMetadata] = useState<any>(metadata);
+  const [metaLoading, setMetaLoading] = useState(false);
   const [previewData, setPreviewData] = useState<PreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [deleteTableId, setDeleteTableId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [hoveredRow, setHoveredRow] = useState<string | null>(null);
   const previewScrollRef = useRef<HTMLDivElement>(null);
 
-  const tables: [string, TableMeta][] = metadata?.tables
-    ? Object.entries<TableMeta>(metadata.tables)
+  // Sync prop metadata
+  useEffect(() => {
+    setActiveMetadata(metadata);
+  }, [metadata]);
+
+  // Fallback: fetch metadata if missing or has no tables
+  useEffect(() => {
+    if (!isOpen || !databaseId) return;
+
+    const hasTables = activeMetadata?.tables && Object.keys(activeMetadata.tables).length > 0;
+    if (!hasTables) {
+      let cancelled = false;
+      setMetaLoading(true);
+      databaseService.getMetadata(databaseId)
+        .then((data) => {
+          if (!cancelled && data) {
+            setActiveMetadata(data);
+          }
+        })
+        .catch((err) => {
+          console.warn('[DatabaseTablesModal] Fallback metadata fetch error:', err);
+        })
+        .finally(() => {
+          if (!cancelled) setMetaLoading(false);
+        });
+      return () => { cancelled = true; };
+    }
+  }, [isOpen, databaseId, activeMetadata]);
+
+  const tables: [string, TableMeta][] = activeMetadata?.tables
+    ? Object.entries<TableMeta>(activeMetadata.tables)
     : [];
 
-  const selectedMeta: TableMeta | null = selectedTable && metadata?.tables
-    ? (metadata.tables[selectedTable] ?? null)
+  const selectedMeta: TableMeta | null = selectedTable && activeMetadata?.tables
+    ? (activeMetadata.tables[selectedTable] ?? null)
     : null;
 
   const resetToList = () => {
     setView('list');
+    setDetailTab('schema');
     setSelectedTable(null);
     setPreviewData(null);
     setPreviewError(null);
@@ -83,11 +116,6 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
   const handleClose = () => {
     resetToList();
     onClose();
-  };
-
-  const handleSelectTable = (name: string) => {
-    setSelectedTable(name);
-    setView('detail');
   };
 
   const loadPreview = useCallback(async (tableName: string, offset = 0) => {
@@ -110,11 +138,11 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
     }
   }, [databaseId]);
 
-  const handleOpenPreview = () => {
-    if (!selectedTable) return;
-    setView('preview');
+  const handleSelectTable = (name: string) => {
+    setSelectedTable(name);
+    setDetailTab('schema');
+    setView('detail');
     setPreviewData(null);
-    loadPreview(selectedTable, 0);
   };
 
   const handlePreviewScroll = () => {
@@ -130,6 +158,12 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
     try {
       await databaseService.deleteTable(databaseId, tableName);
       setDeleteTableId(null);
+      // Remove deleted table from activeMetadata state
+      if (activeMetadata?.tables) {
+        const updated = { ...activeMetadata.tables };
+        delete updated[tableName];
+        setActiveMetadata({ ...activeMetadata, tables: updated });
+      }
       // Go back to list view
       setView('list');
       setSelectedTable(null);
@@ -152,115 +186,155 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
 
   const s = {
     backdrop: {
-      position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.65)',
+      position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.7)',
+      backdropFilter: 'blur(4px)',
       zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: '24px',
+      padding: '20px',
     },
     card: {
-      background: '#0f1117', border: '1px solid rgba(255,255,255,0.1)',
-      borderRadius: '14px', width: '100%', maxWidth: '700px',
-      maxHeight: '80vh', display: 'flex', flexDirection: 'column' as const,
-      boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+      background: '#0d111a', border: '1px solid rgba(255,255,255,0.12)',
+      borderRadius: '16px', width: '100%', maxWidth: '880px',
+      maxHeight: '85vh', display: 'flex', flexDirection: 'column' as const,
+      boxShadow: '0 24px 64px rgba(0,0,0,0.65), 0 0 0 1px rgba(99,102,241,0.1)',
       overflow: 'hidden',
     },
     header: {
-      padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.08)',
-      display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0,
+      padding: '16px 22px', borderBottom: '1px solid rgba(255,255,255,0.08)',
+      display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0,
+      background: 'rgba(255,255,255,0.02)',
     },
     closeBtn: {
       marginLeft: 'auto', padding: '6px', borderRadius: '6px', border: 'none',
       background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer',
-      display: 'flex', alignItems: 'center',
+      display: 'flex', alignItems: 'center', transition: 'color 0.15s',
     },
-    body: { overflowY: 'auto' as const, flex: 1, padding: '16px 20px' },
+    body: { overflowY: 'auto' as const, flex: 1, padding: '18px 22px' },
     backBtn: {
-      display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px',
-      borderRadius: '6px', border: 'none', background: 'rgba(255,255,255,0.05)',
+      display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 12px',
+      borderRadius: '6px', border: '1px solid rgba(255,255,255,0.08)',
+      background: 'rgba(255,255,255,0.04)',
       color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '12px',
-      marginBottom: '14px',
+      fontWeight: 500, transition: 'all 0.15s',
     },
     tableRow: {
-      display: 'flex', alignItems: 'center', gap: '10px',
-      padding: '10px 12px', borderRadius: '8px', cursor: 'pointer',
-      border: '1px solid rgba(255,255,255,0.06)', marginBottom: '6px',
-      background: 'rgba(255,255,255,0.02)', transition: 'background 0.12s ease',
+      display: 'flex', alignItems: 'center', gap: '12px',
+      padding: '12px 14px', borderRadius: '10px', cursor: 'pointer',
+      border: '1px solid rgba(255,255,255,0.06)', marginBottom: '8px',
+      background: 'rgba(255,255,255,0.02)', transition: 'all 0.15s ease',
     },
     badge: (color: string) => ({
-      fontSize: '10px', padding: '2px 7px', borderRadius: '10px',
-      background: `${color}20`, color: color, fontWeight: 600 as const,
+      fontSize: '11px', padding: '3px 8px', borderRadius: '8px',
+      background: `${color}18`, color: color, fontWeight: 600 as const,
+      border: `1px solid ${color}30`,
       whiteSpace: 'nowrap' as const,
     }),
     fieldLabel: {
       fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 as const,
-      display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '4px',
+      display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px',
+      textTransform: 'uppercase' as const, letterSpacing: '0.04em',
     },
     fieldValue: {
-      fontSize: '12.5px', color: 'var(--text-primary)', lineHeight: 1.5,
-      padding: '8px 10px', background: 'rgba(255,255,255,0.04)',
-      borderRadius: '6px', border: '1px solid rgba(255,255,255,0.06)',
+      fontSize: '13px', color: 'var(--text-primary)', lineHeight: 1.5,
+      padding: '10px 12px', background: 'rgba(255,255,255,0.03)',
+      borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)',
     },
     chip: {
-      fontSize: '11px', padding: '2px 8px', borderRadius: '5px',
-      background: 'rgba(99,102,241,0.15)', color: '#a5b4fc',
-      border: '1px solid rgba(99,102,241,0.2)', fontFamily: 'monospace',
-    },
-    previewBtn: {
-      display: 'flex', alignItems: 'center', gap: '6px',
-      padding: '7px 14px', borderRadius: '7px', border: 'none',
-      background: 'rgba(6,182,212,0.12)', color: 'var(--accent-cyan)',
-      cursor: 'pointer', fontSize: '12px', fontWeight: 600 as const,
+      fontSize: '11.5px', padding: '3px 9px', borderRadius: '6px',
+      background: 'rgba(99,102,241,0.12)', color: '#a5b4fc',
+      border: '1px solid rgba(99,102,241,0.25)', fontFamily: 'ui-monospace, monospace',
     },
   };
 
   // ── Table list view ──────────────────────────────────────────────────────────
   const ListView = () => (
     <>
-      <div style={{ marginBottom: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>
-        {tables.length} table{tables.length !== 1 ? 's' : ''} in this database
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+        <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+          {tables.length} table{tables.length !== 1 ? 's' : ''} in this database
+        </div>
+        {metaLoading && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--accent-cyan)' }}>
+            <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />
+            <span>Refreshing schema…</span>
+          </div>
+        )}
       </div>
-      {tables.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)', fontSize: '13px' }}>
-          No tables found. Upload a file to create tables.
+
+      {tables.length === 0 && !metaLoading && (
+        <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)', fontSize: '13px' }}>
+          <TableIcon size={32} style={{ opacity: 0.3, marginBottom: '8px' }} />
+          <div>No tables found in this database.</div>
+          <div style={{ fontSize: '11.5px', marginTop: '4px', opacity: 0.7 }}>Upload a CSV or SQLite file to add tables.</div>
         </div>
       )}
+
       {tables.map(([name, meta]) => (
         <div
           key={name}
           style={s.tableRow}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)'; setHoveredRow(name); }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.02)'; setHoveredRow(null); }}
+          onClick={() => handleSelectTable(name)}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'rgba(99,102,241,0.06)';
+            e.currentTarget.style.borderColor = 'rgba(99,102,241,0.25)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'rgba(255,255,255,0.02)';
+            e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)';
+          }}
         >
-          {/* Clickable area — navigate to detail */}
-          <div
-            style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, cursor: 'pointer', minWidth: 0 }}
-            onClick={() => handleSelectTable(name)}
-          >
-            <TableIcon size={14} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
-            <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <div style={{
+            width: '32px', height: '32px', borderRadius: '8px',
+            background: 'rgba(6,182,212,0.12)', border: '1px solid rgba(6,182,212,0.25)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>
+            <TableIcon size={16} style={{ color: 'var(--accent-cyan)' }} />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1, minWidth: 0 }}>
+            <span style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {name}
             </span>
-            <span style={s.badge('#06b6d4')}>
-              {(meta.row_count ?? 0).toLocaleString()} rows
-            </span>
-            <span style={s.badge('#818cf8')}>
-              {meta.column_count ?? 0} cols
-            </span>
+            {meta.overview && (
+              <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {meta.overview}
+              </span>
+            )}
           </div>
-          {/* Hover actions */}
-          <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0, marginLeft: '6px', visibility: hoveredRow === name ? 'visible' : 'hidden' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>View →</span>
+
+          <span style={s.badge('#06b6d4')}>
+            {(meta.row_count ?? 0).toLocaleString()} rows
+          </span>
+          <span style={s.badge('#818cf8')}>
+            {meta.column_count ?? 0} cols
+          </span>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }} onClick={(e) => e.stopPropagation()}>
             <button
-              type="button"
-              title="Delete this table"
-              onClick={(e) => { e.stopPropagation(); setDeleteTableId(name); }}
+              className="btn-table-action-view"
+              onClick={() => handleSelectTable(name)}
+              title="View schema and table data"
+            >
+              <Eye size={13} />
+              <span>View</span>
+            </button>
+            <button
+              onClick={() => setDeleteTableId(name)}
+              title="Delete table"
               style={{
-                padding: '3px 6px', borderRadius: '5px', border: 'none',
-                background: 'rgba(239,68,68,0.12)', color: '#f87171',
-                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '3px',
-                fontSize: '11px', fontWeight: 600,
+                padding: '6px 8px', borderRadius: '6px', border: '1px solid transparent',
+                background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', transition: 'all 0.15s',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = '#f87171';
+                e.currentTarget.style.background = 'rgba(239,68,68,0.1)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = 'var(--text-muted)';
+                e.currentTarget.style.background = 'transparent';
               }}
             >
-              <Trash2 size={11} />
+              <Trash2 size={13} />
             </button>
           </div>
         </div>
@@ -268,154 +342,232 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
     </>
   );
 
-  // ── Detail view ──────────────────────────────────────────────────────────────
+  // ── Detail & Preview view ───────────────────────────────────────────────────
   const DetailView = () => (
     <>
-      <button style={s.backBtn} onClick={() => setView('list')}>
-        <ArrowLeft size={13} /> Tables
-      </button>
+      {/* Navigation & Action Bar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+        <button style={s.backBtn} onClick={resetToList}>
+          <ArrowLeft size={13} /> Back to Tables
+        </button>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-        <TableIcon size={16} style={{ color: 'var(--accent-cyan)' }} />
-        <span style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>
-          {selectedTable}
-        </span>
-        <span style={s.badge('#06b6d4')}>{(selectedMeta?.row_count ?? 0).toLocaleString()} rows</span>
-        <span style={s.badge('#818cf8')}>{selectedMeta?.column_count ?? 0} cols</span>
-        <button style={{ ...s.previewBtn, marginLeft: 'auto' }} onClick={handleOpenPreview}>
-          <Eye size={13} /> Preview
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <TableIcon size={16} style={{ color: 'var(--accent-cyan)' }} />
+          <span style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>
+            {selectedTable}
+          </span>
+          <span style={s.badge('#06b6d4')}>{(selectedMeta?.row_count ?? 0).toLocaleString()} rows</span>
+          <span style={s.badge('#818cf8')}>{selectedMeta?.column_count ?? 0} cols</span>
+        </div>
+
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {detailTab === 'preview' && (
+            <button
+              onClick={() => selectedTable && loadPreview(selectedTable, 0)}
+              disabled={previewLoading}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '6px',
+                padding: '6px 12px', borderRadius: '7px',
+                border: '1px solid rgba(255,255,255,0.1)',
+                background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)',
+                cursor: previewLoading ? 'not-allowed' : 'pointer', fontSize: '12px',
+              }}
+              title="Refresh table data"
+            >
+              <RefreshCw size={12} className={previewLoading ? 'spin-icon' : ''} />
+              <span>Refresh</span>
+            </button>
+          )}
+          <button
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px',
+              padding: '6px 12px', borderRadius: '7px', border: '1px solid rgba(239,68,68,0.25)',
+              background: 'rgba(239,68,68,0.1)', color: '#f87171',
+              cursor: 'pointer', fontSize: '12px', fontWeight: 600,
+            }}
+            onClick={() => setDeleteTableId(selectedTable)}
+            title="Delete this table"
+          >
+            <Trash2 size={13} /> Delete
+          </button>
+        </div>
+      </div>
+
+      {/* Segmented Tabs: Schema & Metadata first, Data Preview next */}
+      <div className="table-modal-tabs">
+        <button
+          type="button"
+          className={`table-modal-tab ${detailTab === 'schema' ? 'active' : ''}`}
+          onClick={() => setDetailTab('schema')}
+        >
+          <FileText size={13} />
+          <span>Schema & Metadata</span>
         </button>
         <button
-          style={{
-            display: 'flex', alignItems: 'center', gap: '6px',
-            padding: '7px 14px', borderRadius: '7px', border: 'none',
-            background: 'rgba(239,68,68,0.12)', color: '#f87171',
-            cursor: 'pointer', fontSize: '12px', fontWeight: 600,
+          type="button"
+          className={`table-modal-tab ${detailTab === 'preview' ? 'active' : ''}`}
+          onClick={() => {
+            setDetailTab('preview');
+            if (!previewData && selectedTable && !previewLoading) {
+              loadPreview(selectedTable, 0);
+            }
           }}
-          onClick={() => setDeleteTableId(selectedTable)}
-          title="Delete this table"
         >
-          <Trash2 size={13} /> Delete
+          <Eye size={13} />
+          <span>Data Preview</span>
+          {previewData && (
+            <span className="table-modal-tab-badge">{previewData.rows.length} rows</span>
+          )}
         </button>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        {FIELD_DEFS.map(({ key, label, icon, isArray }) => {
-          const val = selectedMeta?.[key];
-          if (val === null || val === undefined || val === '') return null;
-          if (isArray && Array.isArray(val) && val.length === 0) return null;
-
-          return (
-            <div key={key}>
-              <div style={s.fieldLabel}>{icon} {label}</div>
-              {isArray && Array.isArray(val) ? (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
-                  {(val as string[]).map((v) => (
-                    <span key={v} style={s.chip}>{v}</span>
-                  ))}
-                </div>
-              ) : (
-                <div style={s.fieldValue}>{String(val)}</div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </>
-  );
-
-  // ── Preview view ──────────────────────────────────────────────────────────────
-  const PreviewView = () => (
-    <>
-      <button style={s.backBtn} onClick={() => setView('detail')}>
-        <ArrowLeft size={13} /> Metadata
-      </button>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-        <Eye size={14} style={{ color: 'var(--accent-cyan)' }} />
-        <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
-          Preview — {selectedTable}
-        </span>
-        {previewData && (
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-            {previewData.rows.length} / {previewData.total_count.toLocaleString()} rows
-          </span>
-        )}
-      </div>
-
-      {previewError && (
-        <div style={{ padding: '12px', borderRadius: '8px', background: 'rgba(239,68,68,0.1)', color: '#f87171', fontSize: '12px', marginBottom: '12px' }}>
-          {previewError}
-        </div>
-      )}
-
-      {!previewData && previewLoading && (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '32px' }}>
-          <Loader2 size={20} style={{ color: 'var(--accent-cyan)', animation: 'spin 1s linear infinite' }} />
-        </div>
-      )}
-
-      {previewData && (
-        <div
-          ref={previewScrollRef}
-          onScroll={handlePreviewScroll}
-          style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: '360px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}
-        >
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', tableLayout: 'auto' }}>
-            <thead style={{ position: 'sticky', top: 0, background: '#0d1018', zIndex: 1 }}>
-              <tr>
-                {previewData.columns.map((col) => (
-                  <th key={col} style={{ padding: '8px 12px', textAlign: 'left', color: '#a5b4fc', fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.1)', whiteSpace: 'nowrap' }}>
-                    {col}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {previewData.rows.map((row, i) => (
-                <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)' }}>
-                  {previewData.columns.map((col) => (
-                    <td key={col} style={{ padding: '7px 12px', color: 'var(--text-secondary)', borderBottom: '1px solid rgba(255,255,255,0.04)', whiteSpace: 'nowrap', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {row[col] === null || row[col] === undefined ? (
-                        <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>null</span>
-                      ) : String(row[col])}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {previewLoading && (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '12px' }}>
-              <Loader2 size={16} style={{ color: 'var(--accent-cyan)', animation: 'spin 1s linear infinite' }} />
-            </div>
-          )}
-          {!previewLoading && previewData.has_more && (
-            <div style={{ textAlign: 'center', padding: '10px' }}>
+      {/* TAB CONTENT 1: Data Preview */}
+      {detailTab === 'preview' && (
+        <div style={{ marginTop: '14px' }}>
+          {previewError && (
+            <div style={{
+              padding: '12px 14px', borderRadius: '8px',
+              background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)',
+              color: '#f87171', fontSize: '12.5px', marginBottom: '14px',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            }}>
+              <span>{previewError}</span>
               <button
-                onClick={() => loadPreview(selectedTable!, previewData.rows.length)}
-                style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid rgba(6,182,212,0.3)', background: 'rgba(6,182,212,0.08)', color: 'var(--accent-cyan)', cursor: 'pointer', fontSize: '12px' }}
+                onClick={() => selectedTable && loadPreview(selectedTable, 0)}
+                style={{
+                  padding: '4px 10px', borderRadius: '5px',
+                  background: 'rgba(239,68,68,0.2)', color: '#fff',
+                  border: 'none', cursor: 'pointer', fontSize: '11.5px',
+                }}
               >
-                Load more
+                Retry
               </button>
             </div>
           )}
-          {!previewLoading && !previewData.has_more && previewData.rows.length > 0 && (
-            <div style={{ textAlign: 'center', padding: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
-              All {previewData.total_count.toLocaleString()} rows loaded
+
+          {!previewData && previewLoading && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 0', gap: '10px' }}>
+              <Loader2 size={24} style={{ color: 'var(--accent-cyan)', animation: 'spin 1s linear infinite' }} />
+              <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Loading table data…</span>
+            </div>
+          )}
+
+          {previewData && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-muted)', padding: '0 2px' }}>
+                <span>
+                  Showing <strong style={{ color: 'var(--text-primary)' }}>{previewData.rows.length}</strong> of{' '}
+                  <strong style={{ color: 'var(--text-primary)' }}>{previewData.total_count.toLocaleString()}</strong> rows
+                  {' • '}{previewData.columns.length} columns
+                </span>
+                {previewData.has_more && (
+                  <span style={{ fontSize: '11px', color: 'var(--accent-cyan)' }}>Scroll or load more below</span>
+                )}
+              </div>
+
+              <div
+                ref={previewScrollRef}
+                onScroll={handlePreviewScroll}
+                className="table-modal-preview-container"
+              >
+                <table className="table-modal-grid">
+                  <thead>
+                    <tr>
+                      <th style={{ width: '42px', textAlign: 'center', color: 'var(--text-muted)' }}>#</th>
+                      {previewData.columns.map((col) => (
+                        <th key={col}>
+                          {col}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {previewData.rows.map((row, i) => (
+                      <tr key={i}>
+                        <td style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '11px', opacity: 0.7 }}>
+                          {i + 1}
+                        </td>
+                        {previewData.columns.map((col) => (
+                          <td key={col} title={row[col] !== null && row[col] !== undefined ? String(row[col]) : 'null'}>
+                            {row[col] === null || row[col] === undefined ? (
+                              <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '11px' }}>null</span>
+                            ) : (
+                              String(row[col])
+                            )}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                {previewLoading && (
+                  <div style={{ display: 'flex', justifyContent: 'center', padding: '14px', background: 'rgba(0,0,0,0.2)' }}>
+                    <Loader2 size={18} style={{ color: 'var(--accent-cyan)', animation: 'spin 1s linear infinite' }} />
+                  </div>
+                )}
+
+                {!previewLoading && previewData.has_more && (
+                  <div style={{ textAlign: 'center', padding: '12px', background: 'rgba(255,255,255,0.01)' }}>
+                    <button
+                      onClick={() => loadPreview(selectedTable!, previewData.rows.length)}
+                      style={{
+                        padding: '7px 20px', borderRadius: '7px',
+                        border: '1px solid rgba(6,182,212,0.35)',
+                        background: 'rgba(6,182,212,0.1)', color: 'var(--accent-cyan)',
+                        cursor: 'pointer', fontSize: '12.5px', fontWeight: 600,
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      Load next 20 rows
+                    </button>
+                  </div>
+                )}
+
+                {!previewLoading && !previewData.has_more && previewData.rows.length > 0 && (
+                  <div style={{ textAlign: 'center', padding: '10px', fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                    All {previewData.total_count.toLocaleString()} rows loaded
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB CONTENT 2: Schema & Metadata */}
+      {detailTab === 'schema' && (
+        <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {FIELD_DEFS.map(({ key, label, icon, isArray }) => {
+            const val = selectedMeta?.[key];
+            if (val === null || val === undefined || val === '') return null;
+            if (isArray && Array.isArray(val) && val.length === 0) return null;
+
+            return (
+              <div key={key}>
+                <div style={s.fieldLabel}>{icon} {label}</div>
+                {isArray && Array.isArray(val) ? (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {(val as string[]).map((v) => (
+                      <span key={v} style={s.chip}>{v}</span>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={s.fieldValue}>{String(val)}</div>
+                )}
+              </div>
+            );
+          })}
+
+          {!selectedMeta && (
+            <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '12.5px' }}>
+              No extra metadata found for this table.
             </div>
           )}
         </div>
       )}
     </>
   );
-
-  const titleMap: Record<View, string> = {
-    list: databaseName,
-    detail: selectedTable || '',
-    preview: `Preview — ${selectedTable || ''}`,
-  };
 
   // ── Delete Table Confirmation Modal ──────────────────────────────────────────
   const DeleteTableConfirmation = () => {
@@ -426,7 +578,8 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
         style={{
           position: 'fixed',
           inset: 0,
-          background: 'rgba(0,0,0,0.7)',
+          background: 'rgba(0,0,0,0.75)',
+          backdropFilter: 'blur(3px)',
           zIndex: 10001,
           display: 'flex',
           alignItems: 'center',
@@ -438,24 +591,30 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
         <div
           style={{
             background: '#0f1117',
-            border: '1px solid rgba(239,68,68,0.25)',
-            borderRadius: '12px',
-            padding: '20px',
-            maxWidth: '380px',
+            border: '1px solid rgba(239,68,68,0.3)',
+            borderRadius: '14px',
+            padding: '22px',
+            maxWidth: '400px',
             width: '100%',
-            boxShadow: '0 24px 64px rgba(0,0,0,0.5)',
+            boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
           }}
           onClick={(e) => e.stopPropagation()}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-            <AlertCircle size={18} style={{ color: '#f87171', flexShrink: 0 }} />
-            <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
+            <div style={{
+              width: '32px', height: '32px', borderRadius: '8px',
+              background: 'rgba(239,68,68,0.15)', display: 'flex',
+              alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            }}>
+              <AlertCircle size={18} style={{ color: '#f87171' }} />
+            </div>
+            <span style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>
               Delete Table
             </span>
           </div>
 
-          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px', lineHeight: 1.5 }}>
-            Are you sure you want to delete <strong>"{deleteTableId}"</strong>? This table and all its data will be permanently removed from the database.
+          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '18px', lineHeight: 1.5 }}>
+            Are you sure you want to delete table <strong>"{deleteTableId}"</strong>? This table and all its data will be permanently removed.
           </p>
 
           {isDeleting && (
@@ -465,8 +624,8 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
                 alignItems: 'center',
                 gap: '8px',
                 padding: '10px',
-                borderRadius: '6px',
-                marginBottom: '12px',
+                borderRadius: '8px',
+                marginBottom: '14px',
                 background: 'rgba(239,68,68,0.08)',
                 border: '1px solid rgba(239,68,68,0.2)',
                 fontSize: '12px',
@@ -478,18 +637,18 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+          <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
             <button
               onClick={() => setDeleteTableId(null)}
               disabled={isDeleting}
               style={{
                 padding: '8px 16px',
-                borderRadius: '6px',
+                borderRadius: '8px',
                 border: '1px solid rgba(255,255,255,0.1)',
                 background: 'rgba(255,255,255,0.05)',
                 color: 'var(--text-secondary)',
                 cursor: isDeleting ? 'not-allowed' : 'pointer',
-                fontSize: '12px',
+                fontSize: '12.5px',
                 fontWeight: 600,
                 opacity: isDeleting ? 0.5 : 1,
               }}
@@ -500,13 +659,13 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
               onClick={() => handleDeleteTable(deleteTableId)}
               disabled={isDeleting}
               style={{
-                padding: '8px 16px',
-                borderRadius: '6px',
+                padding: '8px 18px',
+                borderRadius: '8px',
                 border: '1px solid #b91c1c',
                 background: '#dc2626',
                 color: '#fff',
                 cursor: isDeleting ? 'not-allowed' : 'pointer',
-                fontSize: '12px',
+                fontSize: '12.5px',
                 fontWeight: 600,
                 display: 'flex',
                 alignItems: 'center',
@@ -516,13 +675,13 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
             >
               {isDeleting ? (
                 <>
-                  <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />
+                  <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />
                   <span>Deleting…</span>
                 </>
               ) : (
                 <>
-                  <Trash2 size={12} />
-                  <span>Delete</span>
+                  <Trash2 size={13} />
+                  <span>Delete Table</span>
                 </>
               )}
             </button>
@@ -538,12 +697,22 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
         <div style={s.card}>
           {/* Header */}
           <div style={s.header}>
-            <Database size={16} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
-            <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
-              {titleMap[view]}
-            </span>
+            <Database size={17} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '14.5px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                {databaseName}
+              </span>
+              {view === 'detail' && selectedTable && (
+                <>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>/</span>
+                  <span style={{ color: 'var(--accent-cyan)', fontSize: '14px', fontWeight: 600 }}>
+                    {selectedTable}
+                  </span>
+                </>
+              )}
+            </div>
             <button style={s.closeBtn} onClick={handleClose} title="Close">
-              <X size={16} />
+              <X size={17} />
             </button>
           </div>
 
@@ -551,7 +720,6 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
           <div style={s.body}>
             {view === 'list' && <ListView />}
             {view === 'detail' && <DetailView />}
-            {view === 'preview' && <PreviewView />}
           </div>
         </div>
       </div>

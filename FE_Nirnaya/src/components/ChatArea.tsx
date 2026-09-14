@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import {
   Copy,
   Check,
@@ -15,14 +15,13 @@ import {
   CheckCircle,
   AlertCircle,
   Sparkles,
-  X,
-  BarChart2,
-  List,
+  HelpCircle,
+  ArrowUpRight,
   Trash2,
   MoreVertical,
 } from 'lucide-react';
 import { LogoEmblem } from './Logo';
-import type { Message, Project, Database as DatabaseType, StepEvent, Artifact, AskUserEvent } from '../types';
+import type { Message, Project, Database as DatabaseType, Artifact, AskUserEvent } from '../types';
 import type { BackendModel } from '../services/sessionService';
 
 // ---------------------------------------------------------------------------
@@ -127,79 +126,6 @@ const MarkdownContent: React.FC<{ text: string }> = ({ text }) => {
 
 // ---------------------------------------------------------------------------
 // TypingDots
-// ---------------------------------------------------------------------------
-
-const TypingDots: React.FC = () => (
-  <div className="typing-indicator-box">
-    <div className="typing-dot" />
-    <div className="typing-dot" />
-    <div className="typing-dot" />
-  </div>
-);
-
-// ---------------------------------------------------------------------------
-// ThinkingSteps (live — inside assistant bubble during processing)
-// ---------------------------------------------------------------------------
-
-const ThinkingSteps: React.FC<{ steps: StepEvent[] }> = ({ steps }) => {
-  const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
-
-  const toggleStep = (seq: number) => {
-    setExpandedSteps((prev) => {
-      const next = new Set(prev);
-      if (next.has(seq)) next.delete(seq);
-      else next.add(seq);
-      return next;
-    });
-  };
-
-  const sortedSteps = [...steps].sort((a, b) => a.seq - b.seq);
-
-  return (
-    <div className="thinking-steps-live">
-      {sortedSteps.map((step, idx) => {
-        const isCurrent = idx === sortedSteps.length - 1;
-        return (
-          <React.Fragment key={step.seq}>
-            <div
-              className={`thinking-step-row${isCurrent && step.status === 'in_progress' ? ' thinking-step-active' : ''}`}
-              onClick={() => step.reasoning && toggleStep(step.seq)}
-              style={{ cursor: step.reasoning ? 'pointer' : 'default' }}
-            >
-              <span className="thinking-step-icon">
-                {step.status === 'in_progress' ? (
-                  <span className="thinking-spin-icon" />
-                ) : step.status === 'error' ? (
-                  <AlertCircle size={13} style={{ color: '#ef4444' }} />
-                ) : (
-                  <CheckCircle size={13} style={{ color: '#10b981' }} />
-                )}
-              </span>
-              <span className="thinking-step-title">{step.title}</span>
-              {step.detail && <span className="thinking-step-detail">— {step.detail}</span>}
-              {step.reasoning && (
-                <ChevronDown
-                  size={10}
-                  style={{
-                    marginLeft: 'auto',
-                    flexShrink: 0,
-                    color: 'var(--text-muted)',
-                    transform: expandedSteps.has(step.seq) ? 'rotate(180deg)' : 'none',
-                    transition: 'transform 0.2s ease',
-                  }}
-                />
-              )}
-            </div>
-            {expandedSteps.has(step.seq) && step.reasoning && (
-              <div className="thinking-step-reasoning">{step.reasoning}</div>
-            )}
-          </React.Fragment>
-        );
-      })}
-    </div>
-  );
-};
-
 // ---------------------------------------------------------------------------
 // TurnMetaRow — rendered BETWEEN user bubble and assistant bubble
 // ---------------------------------------------------------------------------
@@ -378,101 +304,150 @@ const TurnMetaRow: React.FC<{
 };
 
 // ---------------------------------------------------------------------------
-// AskUserBlock
+// AskUserBlock (Claude-Style Checkpoint Clarification)
 // ---------------------------------------------------------------------------
 
 const AskUserBlock: React.FC<{
-  askUser: AskUserEvent;
+  askUser: AskUserEvent & { answeredAnswer?: string };
   onResponse: (turnId: string, answer: string, modelId: string) => void;
   modelId: string;
 }> = ({ askUser, onResponse, modelId }) => {
   const [freeText, setFreeText] = useState('');
+  const [submittedAnswer, setSubmittedAnswer] = useState<string | null>(
+    askUser.answeredAnswer || null
+  );
+
+  useEffect(() => {
+    if (askUser.answeredAnswer) {
+      setSubmittedAnswer(askUser.answeredAnswer);
+    }
+  }, [askUser.answeredAnswer]);
 
   const submit = (answer: string) => {
-    if (!answer.trim()) return;
+    if (!answer.trim() || submittedAnswer) return;
+    setSubmittedAnswer(answer);
     onResponse(askUser.turn_id, answer, modelId);
   };
 
+  const isAnswered = Boolean(submittedAnswer);
+
   return (
-    <div className="ask-user-block">
-      <div className="ask-user-question">{askUser.question}</div>
+    <div className={`claude-ask-container ${isAnswered ? 'is-answered' : ''}`}>
+      <div className="claude-ask-header">
+        <div className="claude-ask-badge">
+          <HelpCircle size={13} className="claude-ask-icon" />
+          <span>Clarification Required</span>
+        </div>
+        {askUser.timeout_seconds && !isAnswered ? (
+          <span className="claude-ask-timer">
+            Auto-skips in {askUser.timeout_seconds}s
+          </span>
+        ) : null}
+      </div>
+
+      <div className="claude-ask-question">
+        {askUser.question}
+      </div>
+
       {askUser.mode === 'mcq' && askUser.options ? (
-        <div className="ask-user-options">
-          {askUser.options.map((opt, i) => (
+        <div className="claude-choices-stack">
+          {askUser.options.map((opt, i) => {
+            const letter = String.fromCharCode(65 + i);
+            const isChosen = submittedAnswer === opt;
+            const isOther = isAnswered && !isChosen;
+
+            return (
+              <button
+                key={i}
+                type="button"
+                className={`claude-choice-card ${isChosen ? 'selected' : ''} ${isOther ? 'dimmed' : ''}`}
+                onClick={() => submit(opt)}
+                disabled={isAnswered}
+              >
+                <span className="claude-choice-badge">{letter}</span>
+                <span className="claude-choice-label">{opt}</span>
+                <div className="claude-choice-indicator">
+                  {isChosen ? (
+                    <Check size={13} className="claude-check-icon" />
+                  ) : (
+                    <span className="claude-radio-dot" />
+                  )}
+                </div>
+              </button>
+            );
+          })}
+
+          <div className="claude-ask-footer">
             <button
-              key={i}
               type="button"
-              className="ask-user-chip"
-              onClick={() => submit(opt)}
+              className={`claude-skip-btn ${submittedAnswer === 'skip' ? 'selected' : ''}`}
+              onClick={() => submit('skip')}
+              disabled={isAnswered}
             >
-              {opt}
+              {submittedAnswer === 'skip' ? (
+                <>
+                  <Check size={12} />
+                  <span>Skipped — proceeding with default strategy</span>
+                </>
+              ) : (
+                <>
+                  <span>Skip and continue with defaults</span>
+                  <ArrowRight size={12} />
+                </>
+              )}
             </button>
-          ))}
-          <button type="button" className="ask-user-skip-btn" onClick={() => submit('skip')}>
-            Skip
-          </button>
+          </div>
         </div>
       ) : (
-        <div className="ask-user-options">
-          <input
-            className="ask-user-input"
-            placeholder="Type your answer…"
-            value={freeText}
-            onChange={(e) => setFreeText(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && submit(freeText)}
-            autoFocus
-          />
-          <button type="button" className="ask-user-send-btn" onClick={() => submit(freeText)}>
-            Send
-          </button>
-          <button type="button" className="ask-user-skip-btn" onClick={() => submit('skip')}>
-            Skip
-          </button>
+        <div className="claude-free-input-wrap">
+          <div className="claude-input-row">
+            <input
+              className="claude-ask-input"
+              placeholder="Type your clarification…"
+              value={freeText}
+              onChange={(e) => setFreeText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  submit(freeText);
+                }
+              }}
+              disabled={isAnswered}
+              autoFocus={!isAnswered}
+            />
+            <button
+              type="button"
+              className="claude-submit-btn"
+              onClick={() => submit(freeText)}
+              disabled={isAnswered || !freeText.trim()}
+            >
+              <span>Submit</span>
+              <ArrowRight size={13} />
+            </button>
+          </div>
+          <div className="claude-ask-footer">
+            <button
+              type="button"
+              className={`claude-skip-btn ${submittedAnswer === 'skip' ? 'selected' : ''}`}
+              onClick={() => submit('skip')}
+              disabled={isAnswered}
+            >
+              {submittedAnswer === 'skip' ? (
+                <>
+                  <Check size={12} />
+                  <span>Skipped — proceeding with default strategy</span>
+                </>
+              ) : (
+                <>
+                  <span>Skip and continue with defaults</span>
+                  <ArrowRight size={12} />
+                </>
+              )}
+            </button>
+          </div>
         </div>
       )}
     </div>
-  );
-};
-
-// ---------------------------------------------------------------------------
-// SvgBarChart
-// ---------------------------------------------------------------------------
-
-const SvgBarChart: React.FC<{ artifact: Artifact }> = ({ artifact }) => {
-  const data = artifact.result_data || [];
-  const enc = artifact.config?.encoding || {};
-  const xField = enc.x?.field || Object.keys(data[0] || {})[0] || '';
-  const yField = enc.y?.field || Object.keys(data[0] || {})[1] || '';
-
-  if (!data.length || !xField || !yField) {
-    return <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '12px' }}>No chart data</div>;
-  }
-
-  const values = data.map((row) => Number(row[yField]) || 0);
-  const maxVal = Math.max(...values, 1);
-  const barW = Math.min(40, Math.floor(280 / data.length) - 4);
-  const chartH = 100;
-
-  return (
-    <svg width="100%" height={chartH + 24} style={{ overflow: 'visible' }}>
-      {data.map((row, i) => {
-        const val = Number(row[yField]) || 0;
-        const barH = Math.max(2, (val / maxVal) * chartH);
-        const x = i * (barW + 4) + 2;
-        const y = chartH - barH;
-        return (
-          <g key={i}>
-            <rect x={x} y={y} width={barW} height={barH} rx={2}
-              fill="rgba(99,102,241,0.7)" />
-            <text x={x + barW / 2} y={chartH + 14} textAnchor="middle"
-              fontSize={9} fill="var(--text-muted)"
-              style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {String(row[xField]).slice(0, 5)}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
   );
 };
 
@@ -509,129 +484,6 @@ const ArtifactThumb: React.FC<{
 };
 
 // ---------------------------------------------------------------------------
-// ArtifactDrawer
-// ---------------------------------------------------------------------------
-
-const ArtifactDrawer: React.FC<{
-  artifact: Artifact;
-  onClose: () => void;
-}> = ({ artifact, onClose }) => {
-  type Tab = 'chart' | 'table' | 'sql' | 'kpi';
-  const availTabs: Tab[] = [];
-  if (artifact.type === 'chart') availTabs.push('chart');
-  if (artifact.type === 'kpi') availTabs.push('kpi');
-  if (artifact.result_data?.length) availTabs.push('table');
-  if (artifact.sql_query) availTabs.push('sql');
-  if (!availTabs.length) availTabs.push('table');
-
-  const [activeTab, setActiveTab] = useState<Tab>(availTabs[0]);
-  const [copiedSql, setCopiedSql] = useState(false);
-
-  const copySQL = () => {
-    navigator.clipboard.writeText(artifact.sql_query || '');
-    setCopiedSql(true);
-    setTimeout(() => setCopiedSql(false), 2000);
-  };
-
-  const tabLabel: Record<Tab, React.ReactNode> = {
-    chart: <><BarChart2 size={12} /> Chart</>,
-    table: <><List size={12} /> Table</>,
-    sql: <><Code2 size={12} /> SQL</>,
-    kpi: <><Sparkles size={12} /> KPI</>,
-  };
-
-  const kpiKeys = Object.keys(artifact.key_numbers || {});
-
-  return (
-    <div className="artifact-drawer-overlay">
-      <div className="artifact-drawer">
-        <div className="artifact-drawer-header">
-          <span className="artifact-drawer-title">{artifact.title}</span>
-          {artifact.note && <span className="artifact-drawer-note">{artifact.note}</span>}
-          <button type="button" className="artifact-drawer-close" onClick={onClose}>
-            <X size={15} />
-          </button>
-        </div>
-        <div className="artifact-drawer-tabs">
-          {availTabs.map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              className={`artifact-drawer-tab${activeTab === tab ? ' active' : ''}`}
-              onClick={() => setActiveTab(tab)}
-            >
-              {tabLabel[tab]}
-            </button>
-          ))}
-        </div>
-        <div className="artifact-drawer-content">
-          {activeTab === 'chart' && (
-            <div style={{ padding: '16px' }}>
-              <SvgBarChart artifact={artifact} />
-            </div>
-          )}
-          {activeTab === 'kpi' && (
-            <div className="artifact-kpi-view">
-              {kpiKeys.map((k) => (
-                <div key={k} className="artifact-kpi-item">
-                  <div className="artifact-kpi-label">{k}</div>
-                  <div className="artifact-kpi-main">{String(artifact.key_numbers[k])}</div>
-                </div>
-              ))}
-            </div>
-          )}
-          {activeTab === 'table' && (
-            <div className="artifact-table-view">
-              {artifact.result_data?.length ? (
-                <table className="analytics-table">
-                  <thead>
-                    <tr>
-                      {Object.keys(artifact.result_data[0]).map((h) => (
-                        <th key={h}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {artifact.result_data.map((row, i) => (
-                      <tr key={i}>
-                        {Object.values(row).map((cell, j) => (
-                          <td key={j}>{String(cell)}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <div style={{ color: 'var(--text-muted)', padding: 16, fontSize: 13 }}>No data</div>
-              )}
-            </div>
-          )}
-          {activeTab === 'sql' && (
-            <div style={{ padding: '12px', position: 'relative' }}>
-              <button
-                type="button"
-                className="btn-copy-code"
-                style={{ position: 'absolute', top: 16, right: 16 }}
-                onClick={copySQL}
-              >
-                {copiedSql ? (
-                  <><Check size={12} style={{ color: 'var(--accent-emerald)' }} />Copied</>
-                ) : (
-                  <><Copy size={12} />Copy SQL</>
-                )}
-              </button>
-              <pre className="code-block-content" style={{ marginTop: 32 }}>
-                <code>{artifact.sql_query}</code>
-              </pre>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// ---------------------------------------------------------------------------
 // ChatArea
 // ---------------------------------------------------------------------------
 
@@ -652,6 +504,7 @@ interface ChatAreaProps {
   onAskUserResponse?: (turnId: string, answer: string, modelId: string) => void;
   /** Delete a turn (pass the assistant message id / turn_id) */
   onDeleteMessage?: (messageId: string) => void;
+  onSelectArtifact?: (artifact: Artifact | null) => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -669,11 +522,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onOpenCredentials,
   onAskUserResponse,
   onDeleteMessage,
+  onSelectArtifact,
 }) => {
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
   const [dbPickerOpen, setDbPickerOpen] = useState(false);
-  const [drawerArtifact, setDrawerArtifact] = useState<Artifact | null>(null);
   const [deletingMsgId, setDeletingMsgId] = useState<string | null>(null);
   /** Which user-message row's 3-dot menu is open (stores the paired assistant id) */
   const [openMenuMsgId, setOpenMenuMsgId] = useState<string | null>(null);
@@ -711,7 +564,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     if (!onDeleteMessage || deletingMsgId) return;
     // UUID validation — guard against local placeholder ids like "msg-assistant-XXXX"
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    const isValidUUID = UUID_RE.test(msgId);
     // Also accept historical prefixed ids like "hist-asst-{uuid}"
     const cleanId = msgId.startsWith('hist-asst-') ? msgId.replace('hist-asst-', '') : msgId;
     if (!UUID_RE.test(cleanId)) {
@@ -973,24 +825,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             const followUps = msg.followUpQuestions || [];
 
             // During streaming: TurnMetaRow handles the live step display.
-            // Hide the full logo+bubble until we have final content.
-            const showAssistantBubble = hasContent || (!isThisLoading && (hasSteps || freshArtifacts.length > 0));
+            // Show assistant bubble when we have content, an ask_user checkpoint, or completed steps.
+            const showAssistantBubble =
+              hasContent ||
+              Boolean(msg.askUser) ||
+              (!isThisLoading && (hasSteps || freshArtifacts.length > 0));
 
             return (
               <React.Fragment key={msg.id}>
                 {/* TurnMetaRow sits BETWEEN user bubble and assistant bubble */}
                 <TurnMetaRow msg={msg} isLast={isLast} isLoading={isLoading} />
 
-                {/* ask_user interrupt block */}
-                {msg.askUser && onAskUserResponse && (
-                  <AskUserBlock
-                    askUser={msg.askUser}
-                    onResponse={onAskUserResponse}
-                    modelId={selectedModelId}
-                  />
-                )}
-
-                {/* Assistant bubble — only rendered once we have actual content */}
+                {/* Assistant bubble — rendered for askUser checkpoint or actual content */}
                 {showAssistantBubble && (
                   <div className="message-row message-row-assistant">
                     <div className="message-bubble-assistant-wrap">
@@ -999,6 +845,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       </div>
                       <div className="assistant-content-box">
                         <div className="assistant-bubble">
+                          {/* Claude-style Checkpoint Clarification block */}
+                          {msg.askUser && onAskUserResponse && (
+                            <AskUserBlock
+                              askUser={msg.askUser}
+                              onResponse={onAskUserResponse}
+                              modelId={selectedModelId}
+                            />
+                          )}
+
                           {/* Final answer */}
                           {hasContent && <MarkdownContent text={msg.content} />}
 
@@ -1085,26 +940,35 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         {freshArtifacts.length > 0 && (
                           <div className="artifact-thumbs-row">
                             {freshArtifacts.map((a) => (
-                              <ArtifactThumb key={a.artifact_id} artifact={a} onClick={setDrawerArtifact} />
+                              <ArtifactThumb key={a.artifact_id} artifact={a} onClick={() => onSelectArtifact?.(a)} />
                             ))}
                           </div>
                         )}
 
-                        {/* Follow-up chips — only on the last assistant message */}
+                        {/* Follow-up questions */}
                         {followUps.length > 0 && isLast && (
-                          <div className="followup-chips-row">
-                            <span className="followup-chips-label">Follow up</span>
-                            {followUps.map((q, qi) => (
-                              <button
-                                key={qi}
-                                type="button"
-                                className="suggestion-pill-btn"
-                                onClick={() => onSendSuggestedPrompt(q)}
-                              >
-                                <span>{q}</span>
-                                <ArrowRight size={11} />
-                              </button>
-                            ))}
+                          <div className="followup-container">
+                            <div className="followup-header">
+                              <div className="followup-header-left">
+                                <Sparkles size={13} className="followup-sparkle-icon" />
+                                <span className="followup-title">Suggested Next Questions</span>
+                              </div>
+                              <span className="followup-hint">Click to ask</span>
+                            </div>
+                            <div className="followup-grid">
+                              {followUps.slice(0, 3).map((q, qi) => (
+                                <button
+                                  key={qi}
+                                  type="button"
+                                  className="followup-card"
+                                  onClick={() => onSendSuggestedPrompt(q)}
+                                >
+                                  <span className="followup-chip">0{qi + 1}</span>
+                                  <span className="followup-text">{q}</span>
+                                  <ArrowUpRight size={13} className="followup-arrow" />
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         )}
 
@@ -1125,10 +989,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         <div ref={scrollEndRef} />
       </div>
 
-      {/* Artifact drawer overlay */}
-      {drawerArtifact && (
-        <ArtifactDrawer artifact={drawerArtifact} onClose={() => setDrawerArtifact(null)} />
-      )}
     </div>
   );
 };

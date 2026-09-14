@@ -839,7 +839,7 @@ async def ask_user_node(state: OrchestratorState, config: RunnableConfig) -> dic
     # Execution continues from the line below.
     user_answer: str = interrupt({"question": question, "mode": mode, "options": options})
 
-    if not user_answer or user_answer.strip() == "__skip__":
+    if not user_answer or user_answer.strip().lower() in ("skip", "__skip__"):
         user_answer = "User did not directly answer — proceed using best judgment and state assumptions made."
 
     logger.info("ask_user_resumed", chat_id=state["chat_id"])

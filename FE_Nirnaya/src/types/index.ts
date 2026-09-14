@@ -32,7 +32,9 @@ export interface AskUserEvent {
   question: string;
   mode: 'mcq' | 'free_text';
   options: string[] | null;
+  timeout_seconds?: number;
   ts: string;
+  answeredAnswer?: string;
 }
 
 export interface Message {

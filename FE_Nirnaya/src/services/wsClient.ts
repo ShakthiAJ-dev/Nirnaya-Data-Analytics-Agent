@@ -39,6 +39,7 @@ export type WSFrameType =
   | 'ask_user'
   | 'error'
   | 'cancel'
+  | 'cancelled'
   | 'stream'
   | 'complete'
   | 'chat_message'
@@ -85,6 +86,7 @@ export class NirnayaWSClient {
   private readonly maxReconnectAttempts = 3;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private currentTxId: string | null = null;
 
   constructor(token: string, callbacks: WSClientCallbacks = {}) {
     this.token = token;
@@ -194,6 +196,7 @@ export class NirnayaWSClient {
   /** Send a chat message to the agent (ChatAgent request). Returns the transaction ID. */
   sendChatMessage(projectId: string, text: string, chatId?: string, extra?: Record<string, unknown>, transactionId?: string): string {
     const txId = transactionId ?? this._genTxId();
+    this.currentTxId = txId;
     this._send({
       requestType: 'ChatAgent',
       transactionId: txId,
@@ -205,9 +208,16 @@ export class NirnayaWSClient {
     return txId;
   }
 
+  /** Get active in-flight transaction ID. */
+  getCurrentTransactionId(): string | null {
+    return this.currentTxId;
+  }
+
   /** Cancel an in-flight transaction. */
-  cancelTransaction(transactionId: string): void {
-    this._sendFrame('cancel', transactionId, '');
+  cancelTransaction(transactionId?: string): void {
+    const txId = transactionId || this.currentTxId || this._genTxId('cancel');
+    this._sendFrame('cancel', txId, '');
+    this.currentTxId = null;
   }
 
   /** Respond to an ask_user interrupt. */

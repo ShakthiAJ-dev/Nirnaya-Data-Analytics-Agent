@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { ChatInput } from './components/ChatInput';
+import { ArtifactsPanel } from './components/ArtifactsPanel';
 import { CredentialsModal } from './components/CredentialsModal';
 import { NewProjectModal } from './components/NewProjectModal';
 import { NewDatabaseModal } from './components/NewDatabaseModal';
@@ -18,6 +19,7 @@ import type {
   FinalEvent,
   WSAckFrame,
   AskUserEvent,
+  Artifact,
 } from './types';
 import { DEFAULT_MODEL_ID } from './constants/models';
 import { useSession } from './hooks/useSession';
@@ -51,6 +53,7 @@ function App() {
   // Project delete confirmation modal state
   const [deleteProjectId, setDeleteProjectId] = useState<string | null>(null);
   const [isDeleteProjectBusy, setIsDeleteProjectBusy] = useState(false);
+  const [selectedArtifact, setSelectedArtifact] = useState<Artifact | null>(null);
 
   const [uploadTargetDbId, setUploadTargetDbId] = useState<string | null>(null);
   const sidebarUploadRef = useRef<HTMLInputElement | null>(null);
@@ -72,11 +75,11 @@ function App() {
     return { anthropicApiKey: '', openaiApiKey: '', preferredProvider: 'anthropic' };
   });
 
-  const [isLoading, setIsLoading] = useState(false);
+  const [runningProjectIds, setRunningProjectIds] = useState<Record<string, boolean>>({});
+  const activeTurnContextsRef = useRef<Record<string, { projectId: string; placeholderId: string }>>({});
 
   const {
     artifacts,
-    finalMarkdown,
     isProcessing,
     turnId,
     startTime,
@@ -98,20 +101,35 @@ function App() {
   // WS frame handler
   // ---------------------------------------------------------------------------
   useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && selectedArtifact) {
+        setSelectedArtifact(null);
+      }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [selectedArtifact]);
+
+  useEffect(() => {
     const unsub = onWSMessage((frame) => {
       console.log('[App] WS frame received:', frame.type, frame);
 
       if (frame.type === 'ack') {
-        const ackFrame = frame as WSAckFrame;
+        const ackFrame = frame as unknown as WSAckFrame;
         activeTurnIdRef.current = ackFrame.turn_id;
         lastSeqRef.current = -1;
         handleAckFrame(ackFrame);
 
         // Rename the placeholder message id to the real turn_id UUID so that
         // deleting the message later passes a valid UUID to the backend.
-        if (currentTurnContextRef.current) {
-          const { projectId, placeholderId } = currentTurnContextRef.current;
+        const context = currentTurnContextRef.current;
+        if (context) {
+          const { projectId, placeholderId } = context;
           const realId = ackFrame.turn_id;
+          activeTurnContextsRef.current[realId] = { projectId, placeholderId: realId };
+          if (placeholderId) {
+            activeTurnContextsRef.current[placeholderId] = { projectId, placeholderId: realId };
+          }
           if (realId && realId !== placeholderId) {
             setProjects((prev) =>
               prev.map((p) =>
@@ -125,7 +143,6 @@ function App() {
                   : p
               )
             );
-            // Update the ref so subsequent step/final frames find the right message
             currentTurnContextRef.current = { projectId, placeholderId: realId };
           }
         }
@@ -133,18 +150,23 @@ function App() {
       }
 
       if (frame.type === 'step') {
-        const stepEvent = frame as StepEvent;
+        const stepEvent = frame as unknown as StepEvent;
         lastSeqRef.current = Math.max(lastSeqRef.current, stepEvent.seq);
         handleStepEvent(stepEvent);
-        if (currentTurnContextRef.current) {
-          const { projectId, placeholderId } = currentTurnContextRef.current;
+
+        const context =
+          (stepEvent.turn_id && activeTurnContextsRef.current[stepEvent.turn_id]) ||
+          currentTurnContextRef.current;
+
+        if (context) {
+          const { projectId, placeholderId } = context;
           setProjects((prev) =>
             prev.map((p) =>
               p.id === projectId
                 ? {
                     ...p,
                     messages: (p.messages || []).map((m) =>
-                      m.id === placeholderId
+                      m.id === placeholderId || (stepEvent.turn_id && m.id === stepEvent.turn_id)
                         ? {
                             ...m,
                             steps: [
@@ -165,15 +187,23 @@ function App() {
       if (frame.type === 'ask_user') {
         const askEvent = frame as unknown as AskUserEvent;
         lastSeqRef.current = Math.max(lastSeqRef.current, askEvent.seq);
-        if (currentTurnContextRef.current) {
-          const { projectId, placeholderId } = currentTurnContextRef.current;
+
+        const context =
+          (askEvent.turn_id && activeTurnContextsRef.current[askEvent.turn_id]) ||
+          currentTurnContextRef.current;
+
+        if (context) {
+          const { projectId, placeholderId } = context;
+          setRunningProjectIds((prev) => ({ ...prev, [projectId]: false }));
           setProjects((prev) =>
             prev.map((p) =>
               p.id === projectId
                 ? {
                     ...p,
                     messages: (p.messages || []).map((m) =>
-                      m.id === placeholderId ? { ...m, askUser: askEvent } : m
+                      m.id === placeholderId || (askEvent.turn_id && m.id === askEvent.turn_id)
+                        ? { ...m, askUser: askEvent }
+                        : m
                     ),
                   }
                 : p
@@ -199,20 +229,26 @@ function App() {
       }
 
       if (frame.type === 'final') {
-        const finalEvent = frame as FinalEvent;
+        const finalEvent = frame as unknown as FinalEvent;
         lastSeqRef.current = Math.max(lastSeqRef.current, finalEvent.seq ?? -1);
         activeTurnIdRef.current = null;
         const thinkingSeconds = startTime ? Math.round((Date.now() - startTime) / 1000) : 0;
         const freshArtifacts = (finalEvent.artifacts || []).filter((a) => a.status === 'fresh');
-        if (currentTurnContextRef.current) {
-          const { projectId, placeholderId } = currentTurnContextRef.current;
+
+        const context =
+          (finalEvent.turn_id && activeTurnContextsRef.current[finalEvent.turn_id]) ||
+          currentTurnContextRef.current;
+
+        if (context) {
+          const { projectId, placeholderId } = context;
+          setRunningProjectIds((prev) => ({ ...prev, [projectId]: false }));
           setProjects((prev) =>
             prev.map((p) =>
               p.id === projectId
                 ? {
                     ...p,
                     messages: (p.messages || []).map((m) =>
-                      m.id === placeholderId
+                      m.id === placeholderId || (finalEvent.turn_id && m.id === finalEvent.turn_id)
                         ? {
                             ...m,
                             content: finalEvent.markdown || m.content,
@@ -221,7 +257,7 @@ function App() {
                             executionTimeMs: finalEvent.execution_time_ms,
                             artifacts: freshArtifacts,
                             followUpQuestions: finalEvent.follow_up_questions || [],
-                            askUser: undefined,
+                            askUser: m.askUser ? { ...m.askUser, answeredAnswer: m.askUser.answeredAnswer || 'completed' } : undefined,
                           }
                         : m
                     ),
@@ -229,18 +265,88 @@ function App() {
                 : p
             )
           );
-          currentTurnContextRef.current = null;
+          if (finalEvent.turn_id) delete activeTurnContextsRef.current[finalEvent.turn_id];
+          if (placeholderId) delete activeTurnContextsRef.current[placeholderId];
+          if (currentTurnContextRef.current?.placeholderId === placeholderId || currentTurnContextRef.current?.placeholderId === finalEvent.turn_id) {
+            currentTurnContextRef.current = null;
+          }
         }
         handleFinalEvent(finalEvent);
-        setIsLoading(false);
+        return;
+      }
+
+      if (frame.type === 'cancelled') {
+        activeTurnIdRef.current = null;
+        const turnId = (frame.turn_id as string) || activeTurnIdRef.current;
+        const context =
+          (turnId && activeTurnContextsRef.current[turnId]) ||
+          currentTurnContextRef.current;
+
+        if (context) {
+          const { projectId, placeholderId } = context;
+          setRunningProjectIds((prev) => ({ ...prev, [projectId]: false }));
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === projectId
+                ? {
+                    ...p,
+                    messages: (p.messages || []).map((m) =>
+                      m.id === placeholderId || (turnId && m.id === turnId)
+                        ? {
+                            ...m,
+                            content: m.content
+                              ? `${m.content}\n\n*(Generation cancelled)*`
+                              : '*(Generation cancelled)*',
+                            isStreaming: false,
+                          }
+                        : m
+                    ),
+                  }
+                : p
+            )
+          );
+          if (turnId) delete activeTurnContextsRef.current[turnId];
+          if (placeholderId) delete activeTurnContextsRef.current[placeholderId];
+          if (currentTurnContextRef.current?.placeholderId === placeholderId) {
+            currentTurnContextRef.current = null;
+          }
+        }
         return;
       }
 
       if (frame.type === 'error') {
         const errTurnId = frame.turn_id as string;
-        const message = (frame.message as string) || 'Unknown error';
+        const message = (frame.message as string) || 'An error occurred while generating response.';
         handleErrorEvent(errTurnId, message);
-        setIsLoading(false);
+
+        const context =
+          (errTurnId && activeTurnContextsRef.current[errTurnId]) ||
+          currentTurnContextRef.current;
+
+        if (context) {
+          const { projectId, placeholderId } = context;
+          setRunningProjectIds((prev) => ({ ...prev, [projectId]: false }));
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === projectId
+                ? {
+                    ...p,
+                    messages: (p.messages || []).map((m) =>
+                      m.id === placeholderId || (errTurnId && m.id === errTurnId)
+                        ? {
+                            ...m,
+                            content: `⚠️ ${message}`,
+                            isStreaming: false,
+                          }
+                        : m
+                    ),
+                  }
+                : p
+            )
+          );
+          if (errTurnId) delete activeTurnContextsRef.current[errTurnId];
+          if (placeholderId) delete activeTurnContextsRef.current[placeholderId];
+        }
         return;
       }
 
@@ -288,7 +394,7 @@ function App() {
           )
         );
         delete streamingRef.current[frame.transactionId!];
-        setIsLoading(false);
+        setRunningProjectIds((prev) => ({ ...prev, [projectId]: false }));
       }
     });
     return unsub;
@@ -417,22 +523,61 @@ function App() {
 
   const handleAskUserResponse = useCallback((turnId: string, answer: string, modelId: string) => {
     if (!wsClient?.isReady) return;
+    const context = activeTurnContextsRef.current[turnId];
+    const targetProjId = context?.projectId || currentProjectId;
+    if (targetProjId) {
+      setRunningProjectIds((prev) => ({ ...prev, [targetProjId]: true }));
+      activeTurnContextsRef.current[turnId] = { projectId: targetProjId, placeholderId: turnId };
+    }
     wsClient.sendAskUserResponse(turnId, answer, modelId);
-    // Clear the askUser from the message
+    // Mark the askUser as answered so the UI displays the selected state smoothly
     setProjects((prev) =>
       prev.map((p) => ({
         ...p,
         messages: (p.messages || []).map((m) =>
-          m.askUser?.turn_id === turnId ? { ...m, askUser: undefined } : m
+          m.askUser?.turn_id === turnId
+            ? { ...m, askUser: { ...m.askUser, answeredAnswer: answer } }
+            : m
         ),
       }))
     );
-  }, [wsClient]);
+  }, [wsClient, currentProjectId]);
 
   /** Logo click — go back to home (no project selected) */
   const handleGoHome = () => {
     setCurrentProjectId(null);
   };
+
+  const handleStopGeneration = useCallback(() => {
+    if (wsClient?.isReady) {
+      wsClient.cancelTransaction();
+    }
+    const targetProjId = currentProjectId;
+    if (targetProjId) {
+      setRunningProjectIds((prev) => ({ ...prev, [targetProjId]: false }));
+      const placeholderId = currentTurnContextRef.current?.placeholderId;
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === targetProjId
+            ? {
+                ...p,
+                messages: (p.messages || []).map((m) =>
+                  (placeholderId && m.id === placeholderId) || m.id === activeTurnIdRef.current
+                    ? {
+                        ...m,
+                        content: m.content ? `${m.content}\n\n*(Generation cancelled)*` : '*(Generation cancelled)*',
+                        isStreaming: false,
+                      }
+                    : m
+                ),
+              }
+            : p
+        )
+      );
+    }
+    activeTurnIdRef.current = null;
+    currentTurnContextRef.current = null;
+  }, [wsClient, currentProjectId]);
 
   const handleSelectProject = (projectId: string) => {
     setCurrentProjectId(projectId);
@@ -448,7 +593,7 @@ function App() {
     }
 
     // Prevent switching during message processing
-    if (isLoading) {
+    if (currentProjectId && runningProjectIds[currentProjectId]) {
       console.warn('[App] Cannot switch database while message is processing');
       return;
     }
@@ -647,7 +792,7 @@ function App() {
     // which already updates the sidebar title. See the WS frame handler above.
 
     resetStepTracking();
-    setIsLoading(true);
+    setRunningProjectIds((prev) => ({ ...prev, [targetProjectId]: true }));
 
     const placeholderId = `msg-assistant-${Date.now()}`;
     const placeholder: Message = {
@@ -669,6 +814,7 @@ function App() {
     );
 
     currentTurnContextRef.current = { projectId: targetProjectId, placeholderId };
+    activeTurnContextsRef.current[placeholderId] = { projectId: targetProjectId, placeholderId };
 
     try {
       if (wsClient?.isReady && targetProjectId) {
@@ -695,7 +841,7 @@ function App() {
               : p
           )
         );
-        setIsLoading(false);
+        setRunningProjectIds((prev) => ({ ...prev, [targetProjectId]: false }));
       }
     } catch (err) {
       console.error('[App] WS send failed:', err);
@@ -713,13 +859,14 @@ function App() {
             : p
         )
       );
-      setIsLoading(false);
+      setRunningProjectIds((prev) => ({ ...prev, [targetProjectId]: false }));
     }
   };
 
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
+  const isCurrentProjectLoading = Boolean(currentProjectId && runningProjectIds[currentProjectId]);
   const activeMessages = currentProject?.messages ?? [];
 
   const pendingDatabaseName =
@@ -771,7 +918,7 @@ function App() {
                 currentProjectId={currentProjectId}
                 messages={activeMessages}
                 selectedModelId={selectedModelId}
-                isLoading={isLoading || isLoadingData}
+                isLoading={isCurrentProjectLoading || isLoadingData}
                 isDataLoaded={isDataLoaded}
                 pendingDatabaseName={pendingDatabaseName}
                 availableDatabasesForPicker={databases}
@@ -781,6 +928,7 @@ function App() {
                 onOpenCredentials={() => setIsCredentialsModalOpen(true)}
                 onAskUserResponse={handleAskUserResponse}
                 onDeleteMessage={handleDeleteMessage}
+                onSelectArtifact={setSelectedArtifact}
               />
             </div>
           </div>
@@ -789,14 +937,48 @@ function App() {
             onSendMessage={handleSendMessage}
             selectedModelId={selectedModelId}
             onSelectModel={(modelId) => setSelectedModelId(modelId)}
-            isLoading={isLoading}
+            isLoading={isCurrentProjectLoading}
             isDataLoaded={isDataLoaded}
             availableModels={availableModels}
             onOpenCredentials={() => setIsCredentialsModalOpen(true)}
             noDatabaseSelected={pendingDatabaseId === null}
             onAddDemo={handleOpenDemoModal}
+            onStopGeneration={handleStopGeneration}
           />
         </div>
+
+        {/* Artifacts panel — right side, collapsible */}
+        {selectedArtifact && (
+          <div style={{
+            width: '400px',
+            borderLeft: '1px solid var(--border-color)',
+            background: 'var(--bg-primary)',
+            display: 'flex',
+            flexDirection: 'column',
+            animation: 'slideInRight 0.3s ease',
+          }}>
+            <div style={{ padding: '12px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '12px', fontWeight: '600', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>Artifact</span>
+              <button onClick={() => setSelectedArtifact(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '20px', padding: 0 }}>×</button>
+            </div>
+            <div style={{ flex: 1, overflow: 'auto' }}>
+              <ArtifactsPanel artifacts={[selectedArtifact]} />
+            </div>
+          </div>
+        )}
+
+        <style>{`
+          @keyframes slideInRight {
+            from {
+              transform: translateX(100%);
+              opacity: 0;
+            }
+            to {
+              transform: translateX(0);
+              opacity: 1;
+            }
+          }
+        `}</style>
       </div>
 
       <CredentialsModal
