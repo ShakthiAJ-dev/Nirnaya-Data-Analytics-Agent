@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Code2, BarChart3, Table as TableIcon, Copy, Check } from 'lucide-react';
+import { Copy, Check } from 'lucide-react';
 import type { Artifact } from '../types';
 
 interface ArtifactsPanelProps {

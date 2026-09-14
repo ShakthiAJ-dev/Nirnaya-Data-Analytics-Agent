@@ -15,6 +15,8 @@ import {
   CheckCircle,
   AlertCircle,
   Sparkles,
+  HelpCircle,
+  ArrowUpRight,
   Trash2,
   MoreVertical,
 } from 'lucide-react';
@@ -241,56 +243,147 @@ const TurnMetaRow: React.FC<{
 };
 
 // ---------------------------------------------------------------------------
-// AskUserBlock
+// AskUserBlock (Claude-Style Checkpoint Clarification)
 // ---------------------------------------------------------------------------
 
 const AskUserBlock: React.FC<{
-  askUser: AskUserEvent;
+  askUser: AskUserEvent & { answeredAnswer?: string };
   onResponse: (turnId: string, answer: string, modelId: string) => void;
   modelId: string;
 }> = ({ askUser, onResponse, modelId }) => {
   const [freeText, setFreeText] = useState('');
+  const [submittedAnswer, setSubmittedAnswer] = useState<string | null>(
+    askUser.answeredAnswer || null
+  );
+
+  useEffect(() => {
+    if (askUser.answeredAnswer) {
+      setSubmittedAnswer(askUser.answeredAnswer);
+    }
+  }, [askUser.answeredAnswer]);
 
   const submit = (answer: string) => {
-    if (!answer.trim()) return;
+    if (!answer.trim() || submittedAnswer) return;
+    setSubmittedAnswer(answer);
     onResponse(askUser.turn_id, answer, modelId);
   };
 
+  const isAnswered = Boolean(submittedAnswer);
+
   return (
-    <div className="ask-user-block">
-      <div className="ask-user-question">{askUser.question}</div>
+    <div className={`claude-ask-container ${isAnswered ? 'is-answered' : ''}`}>
+      <div className="claude-ask-header">
+        <div className="claude-ask-badge">
+          <HelpCircle size={13} className="claude-ask-icon" />
+          <span>Clarification Required</span>
+        </div>
+        {askUser.timeout_seconds && !isAnswered ? (
+          <span className="claude-ask-timer">
+            Auto-skips in {askUser.timeout_seconds}s
+          </span>
+        ) : null}
+      </div>
+
+      <div className="claude-ask-question">
+        {askUser.question}
+      </div>
+
       {askUser.mode === 'mcq' && askUser.options ? (
-        <div className="ask-user-options">
-          {askUser.options.map((opt, i) => (
+        <div className="claude-choices-stack">
+          {askUser.options.map((opt, i) => {
+            const letter = String.fromCharCode(65 + i);
+            const isChosen = submittedAnswer === opt;
+            const isOther = isAnswered && !isChosen;
+
+            return (
+              <button
+                key={i}
+                type="button"
+                className={`claude-choice-card ${isChosen ? 'selected' : ''} ${isOther ? 'dimmed' : ''}`}
+                onClick={() => submit(opt)}
+                disabled={isAnswered}
+              >
+                <span className="claude-choice-badge">{letter}</span>
+                <span className="claude-choice-label">{opt}</span>
+                <div className="claude-choice-indicator">
+                  {isChosen ? (
+                    <Check size={13} className="claude-check-icon" />
+                  ) : (
+                    <span className="claude-radio-dot" />
+                  )}
+                </div>
+              </button>
+            );
+          })}
+
+          <div className="claude-ask-footer">
             <button
-              key={i}
               type="button"
-              className="ask-user-chip"
-              onClick={() => submit(opt)}
+              className={`claude-skip-btn ${submittedAnswer === 'skip' ? 'selected' : ''}`}
+              onClick={() => submit('skip')}
+              disabled={isAnswered}
             >
-              {opt}
+              {submittedAnswer === 'skip' ? (
+                <>
+                  <Check size={12} />
+                  <span>Skipped — proceeding with default strategy</span>
+                </>
+              ) : (
+                <>
+                  <span>Skip and continue with defaults</span>
+                  <ArrowRight size={12} />
+                </>
+              )}
             </button>
-          ))}
-          <button type="button" className="ask-user-skip-btn" onClick={() => submit('skip')}>
-            Skip
-          </button>
+          </div>
         </div>
       ) : (
-        <div className="ask-user-options">
-          <input
-            className="ask-user-input"
-            placeholder="Type your answer…"
-            value={freeText}
-            onChange={(e) => setFreeText(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && submit(freeText)}
-            autoFocus
-          />
-          <button type="button" className="ask-user-send-btn" onClick={() => submit(freeText)}>
-            Send
-          </button>
-          <button type="button" className="ask-user-skip-btn" onClick={() => submit('skip')}>
-            Skip
-          </button>
+        <div className="claude-free-input-wrap">
+          <div className="claude-input-row">
+            <input
+              className="claude-ask-input"
+              placeholder="Type your clarification…"
+              value={freeText}
+              onChange={(e) => setFreeText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  submit(freeText);
+                }
+              }}
+              disabled={isAnswered}
+              autoFocus={!isAnswered}
+            />
+            <button
+              type="button"
+              className="claude-submit-btn"
+              onClick={() => submit(freeText)}
+              disabled={isAnswered || !freeText.trim()}
+            >
+              <span>Submit</span>
+              <ArrowRight size={13} />
+            </button>
+          </div>
+          <div className="claude-ask-footer">
+            <button
+              type="button"
+              className={`claude-skip-btn ${submittedAnswer === 'skip' ? 'selected' : ''}`}
+              onClick={() => submit('skip')}
+              disabled={isAnswered}
+            >
+              {submittedAnswer === 'skip' ? (
+                <>
+                  <Check size={12} />
+                  <span>Skipped — proceeding with default strategy</span>
+                </>
+              ) : (
+                <>
+                  <span>Skip and continue with defaults</span>
+                  <ArrowRight size={12} />
+                </>
+              )}
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -654,26 +747,26 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   {/* TurnMetaRow sits BETWEEN user bubble and assistant bubble */}
                   <TurnMetaRow msg={msg} isLast={isLast} isLoading={isLoading} />
 
-                  {/* ask_user interrupt block */}
-                  {msg.askUser && onAskUserResponse && (
-                    <AskUserBlock
-                      askUser={msg.askUser}
-                      onResponse={onAskUserResponse}
-                      modelId={selectedModelId}
-                    />
-                  )}
+                {/* Assistant bubble — rendered for askUser checkpoint or actual content */}
+                {showAssistantBubble && (
+                  <div className="message-row message-row-assistant">
+                    <div className="message-bubble-assistant-wrap">
+                      <div className="assistant-avatar" title="Nirnaya Analytics Agent">
+                        <LogoEmblem size={22} />
+                      </div>
+                      <div className="assistant-content-box">
+                        <div className="assistant-bubble">
+                          {/* Claude-style Checkpoint Clarification block */}
+                          {msg.askUser && onAskUserResponse && (
+                            <AskUserBlock
+                              askUser={msg.askUser}
+                              onResponse={onAskUserResponse}
+                              modelId={selectedModelId}
+                            />
+                          )}
 
-                  {/* Assistant bubble — only rendered once we have actual content */}
-                  {showAssistantBubble && (
-                    <div className="message-row message-row-assistant">
-                      <div className="message-bubble-assistant-wrap">
-                        <div className="assistant-avatar" title="Nirnaya Analytics Agent">
-                          <LogoEmblem size={22} />
-                        </div>
-                        <div className="assistant-content-box">
-                          <div className="assistant-bubble">
-                            {/* Final answer */}
-                            {hasContent && <MarkdownContent text={msg.content} />}
+                          {/* Final answer */}
+                          {hasContent && <MarkdownContent text={msg.content} />}
 
                             {/* Legacy: SQL query block */}
                             {msg.sqlQuery && (
@@ -763,23 +856,32 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                             </div>
                           )}
 
-                          {/* Follow-up chips — only on the last assistant message */}
-                          {followUps.length > 0 && isLast && (
-                            <div className="followup-chips-row">
-                              <span className="followup-chips-label">Follow up</span>
-                              {followUps.map((q, qi) => (
+                        {/* Follow-up questions */}
+                        {followUps.length > 0 && isLast && (
+                          <div className="followup-container">
+                            <div className="followup-header">
+                              <div className="followup-header-left">
+                                <Sparkles size={13} className="followup-sparkle-icon" />
+                                <span className="followup-title">Suggested Next Questions</span>
+                              </div>
+                              <span className="followup-hint">Click to ask</span>
+                            </div>
+                            <div className="followup-grid">
+                              {followUps.slice(0, 3).map((q, qi) => (
                                 <button
                                   key={qi}
                                   type="button"
-                                  className="suggestion-pill-btn"
+                                  className="followup-card"
                                   onClick={() => onSendSuggestedPrompt(q)}
                                 >
-                                  <span>{q}</span>
-                                  <ArrowRight size={11} />
+                                  <span className="followup-chip">0{qi + 1}</span>
+                                  <span className="followup-text">{q}</span>
+                                  <ArrowUpRight size={13} className="followup-arrow" />
                                 </button>
                               ))}
                             </div>
-                          )}
+                          </div>
+                        )}
 
                           <div className="assistant-meta-left">
                             <Clock size={11} />

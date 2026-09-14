@@ -59,6 +59,11 @@ export const databaseService = {
     await api.delete(`/databases/${databaseId}`);
   },
 
+  getMetadata: async (databaseId: string): Promise<any> => {
+    const res = await api.get<{ success: boolean; data: any }>(`/databases/${databaseId}/metadata`);
+    return res.data;
+  },
+
   presignUpload: async (databaseId: string, filename: string): Promise<PresignUploadResponse> => {
     const res = await api.post<{ success: boolean; data: PresignUploadResponse }>(
       `/databases/${databaseId}/upload/presign`,

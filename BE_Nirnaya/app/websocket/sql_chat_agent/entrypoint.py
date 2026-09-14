@@ -465,6 +465,29 @@ async def handle_chat_agent(
 
     try:
         result = await compiled_graph.ainvoke(initial_state, config=thread_config)
+
+        # Check if graph was interrupted (ask_user)
+        if "__interrupt__" in result:
+            logger.info("graph_interrupted_for_ask_user", turn_id=turn_id)
+            # Cache pending turn context for resume
+            pending_context = {
+                "chat_id": chat_id,
+                "project_id": project_id,
+                "database_id": database_id,
+                "turn_id": turn_id,
+                "turn_start_ms": turn_start_ms,
+                "seq": seq_counter.current,
+                "full_metadata": full_metadata,
+                "model": model,
+                "provider": provider,
+            }
+            await redis_service.cache_set(
+                f"pending_turn:{turn_id}",
+                pending_context,
+                ttl=1800  # 30 min
+            )
+            return
+
         final_markdown      = result.get("final_markdown", "")
         follow_up_questions = result.get("follow_up_questions", [])
         artifact_ids = [
@@ -549,35 +572,80 @@ async def handle_ask_user_response(
 
     pending: dict = pending_raw if isinstance(pending_raw, dict) else {}
     chat_id = pending.get("chat_id", "")
-    thread_config = pending.get("config", {})
+    project_id = pending.get("project_id", "")
+    database_id = pending.get("database_id")
+    turn_start_ms = pending.get("turn_start_ms", int(time.monotonic() * 1000))
 
     if not chat_id or not checkpointer:
+        logger.warning(
+            "ask_user_resume_missing_chat_or_checkpointer",
+            turn_id=turn_id,
+            has_chat=bool(chat_id),
+            has_cp=bool(checkpointer),
+        )
         return
 
     seq_counter = SeqCounter(start=pending.get("seq", 10))
-    ws_send = make_ws_sender(ws_send_raw, redis_service, turn_id)
+    steps_log: list[dict[str, Any]] = []
+    ws_send = make_ws_sender(ws_send_raw, redis_service, turn_id, steps_log)
 
     session_svc = SessionService(redis_service)
     llm_service = LLMService.from_session(session_id, session_svc)
     chat_svc = ChatService(session_id, supabase_service)
 
-    thread_config.setdefault("configurable", {})
-    thread_config["configurable"].update({
-        "model":            model,
-        "provider":         provider,
-        "ws_send":          ws_send,
-        "seq_counter":      seq_counter,
-        "llm_service":      llm_service,
-        "supabase_service": supabase_service,
-        "redis_service":    redis_service,
-        "chat_service":     chat_svc,
-        "full_metadata":    pending.get("full_metadata", {}),
-    })
+    thread_config: RunnableConfig = {
+        "configurable": {
+            "thread_id":        turn_id,
+            "model":            model,
+            "provider":         provider,
+            "ws_send":          ws_send,
+            "seq_counter":      seq_counter,
+            "llm_service":      llm_service,
+            "supabase_service": supabase_service,
+            "redis_service":    redis_service,
+            "chat_service":     chat_svc,
+            "full_metadata":    pending.get("full_metadata", {}),
+            "effective_db_id":  database_id,
+            "project_id":       project_id,
+            "turn_message_id":  turn_id,
+            "turn_start_ms":    turn_start_ms,
+        }
+    }
 
     compiled_graph = build_orchestrator_graph(checkpointer=checkpointer)
 
     try:
-        await compiled_graph.ainvoke(Command(resume=answer), config=thread_config)
+        result = await compiled_graph.ainvoke(Command(resume=answer), config=thread_config)
+
+        if "__interrupt__" in result:
+            logger.info("graph_reinterrupted_for_ask_user", turn_id=turn_id)
+            pending["seq"] = seq_counter.current
+            await redis_service.cache_set(f"pending_turn:{turn_id}", pending, ttl=1800)
+            return
+
+        final_markdown = result.get("final_markdown", "")
+        follow_up_questions = result.get("follow_up_questions", [])
+        artifact_ids = [
+            r["artifact_id"]
+            for r in result.get("artifact_results", [])
+            if r.get("status") == "fresh"
+        ]
+
+        # Persist final output
+        try:
+            await chat_svc.update_turn_output(
+                turn_id=turn_id,
+                output={
+                    "markdown":            final_markdown,
+                    "artifact_ids":        artifact_ids,
+                    "follow_up_questions": follow_up_questions,
+                    "execution_time_ms":   int(time.monotonic() * 1000) - turn_start_ms,
+                    "steps":               steps_log,
+                },
+            )
+        except Exception as exc:
+            logger.warning("turn_output_update_failed_on_resume", error=str(exc))
+
     except Exception as exc:
         logger.error("ask_user_resume_error", turn_id=turn_id, error=str(exc))
         await ws_send(make_error(
@@ -585,5 +653,12 @@ async def handle_ask_user_response(
             seq=await seq_counter.next(),
             message=f"Failed to resume: {str(exc)[:200]}",
         ))
+
+    # Clean up checkpoint + pending cache
+    if checkpointer:
+        try:
+            await checkpointer.adelete({"configurable": {"thread_id": turn_id}})
+        except Exception:
+            pass
 
     await redis_service.cache_delete(f"pending_turn:{turn_id}")
