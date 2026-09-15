@@ -1,0 +1,21 @@
+﻿name: Keep Render Backend Awake
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # every 10 minutes — leaves buffer against Render's 15-min sleep window
+  workflow_dispatch:          # allows manual trigger from GitHub Actions UI
+
+jobs:
+  ping:
+    name: Ping Nirnaya health endpoint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /api/v1/health
+        run: |
+          echo "Pinging ${{ secrets.RENDER_BACKEND_URL }}/api/v1/health ..."
+          curl -sf "${{ secrets.RENDER_BACKEND_URL }}/api/v1/health" \
+            --max-time 15 \
+            --retry 2 \
+            --retry-delay 5 \
+          && echo "✅ Backend is awake" \
+          || echo "⚠️  Ping failed (backend may be cold-starting)"
