@@ -65,6 +65,7 @@ from .prompts import (
     DECIDE_SYSTEM,
     SYNTHESIZE_SYSTEM,
     build_orchestrator_system_prompt,
+    _format_recent_turns,
 )
 from .state import OrchestratorState
 from .tools_orchestrator import create_orchestrator_tools
@@ -220,12 +221,16 @@ async def skim_tables_node(state: OrchestratorState, config: RunnableConfig) -> 
         reasoning=reasoning,
     ))
 
+    # ask_user_count persists across turns — read without resetting
+    ask_user_count = state.get("ask_user_count", 0)
+
     # Build the initial system + user message for the discovery LLM
     system_prompt = build_orchestrator_system_prompt(
         schema_name=state["schema_name"],
         full_metadata=full_metadata,
         business_rules_index=state["business_rules_index"],
         recent_turns=recent_turns,
+        ask_user_count=ask_user_count,
     )
 
     seed_messages = [
@@ -239,6 +244,7 @@ async def skim_tables_node(state: OrchestratorState, config: RunnableConfig) -> 
         "fetched_table_details": {},
         "discovery_results": [],
         "artifact_results": [],
+        "discovery_key_findings": "",   # reset each turn
     }
 
 
@@ -281,10 +287,13 @@ async def discovery_loop_node(state: OrchestratorState, config: RunnableConfig) 
     )
 
     # Build tools for this turn
+    has_business_rules = bool(state.get("business_rules_index", []))
     orchestrator_tools = create_orchestrator_tools(
         schema_name=state["schema_name"],
         full_metadata=full_metadata,
         supabase_service=supabase_service,
+        has_business_rules=has_business_rules,
+        ask_user_count=state.get("ask_user_count", 0),
     )
 
     try:
@@ -369,12 +378,13 @@ async def discovery_loop_node(state: OrchestratorState, config: RunnableConfig) 
 # Edge routing from discovery_loop
 # ---------------------------------------------------------------------------
 
-def route_after_discovery(state: OrchestratorState) -> Literal["tool_executor", "shortcut_decide_node", "decide_node"]:
+def route_after_discovery(state: OrchestratorState) -> Literal["tool_executor", "shortcut_decide_node", "decide_node", "ask_user_node"]:
     """
     Route based on the last AI message:
-    - Has tool_calls AND not all are signal_ready_to_decide → run tools
-    - No tool_calls + non-empty text content → shortcut_decide_node (reuse text, skip LLM)
-    - No tool_calls + empty content OR signal_ready_to_decide only → decide_node (LLM needed)
+    - ask_user_during_discovery tool call → ask_user_node (bypasses tool_executor)
+    - Has other tool_calls → tool_executor
+    - No tool_calls + very short first-iteration response → shortcut_decide_node (likely greeting)
+    - Everything else → decide_node
     - Max iterations exceeded → force decide
     """
     iteration = state.get("discovery_iterations", 0)
@@ -389,23 +399,32 @@ def route_after_discovery(state: OrchestratorState) -> Literal["tool_executor", 
     last = messages[-1]
     tool_calls = getattr(last, "tool_calls", []) or []
 
+    # ask_user_during_discovery takes priority — route directly to ask_user_node
+    if any(tc["name"] == "ask_user_during_discovery" for tc in tool_calls):
+        logger.info("discovery_routing", decision="ask_user_node", reason="ask_user_during_discovery", iteration=iteration)
+        return "ask_user_node"
+
     if not tool_calls:
-        # Check if the AI message already contains a usable text answer.
-        # If so, we can bypass the decide_node LLM call entirely.
         content = last.content if isinstance(last.content, str) else ""
         if not content and isinstance(last.content, list):
             content = " ".join(
                 b.get("text", "") for b in last.content
                 if isinstance(b, dict) and b.get("type") == "text"
             ).strip()
-        if content and len(content.strip()) > 20:  # meaningful text answer
-            logger.info("discovery_routing", decision="shortcut_decide_node", reason="direct_text_answer", iteration=iteration)
-            return "shortcut_decide_node"
+        if content and len(content.strip()) > 20:
+            # Only shortcut for very short first-iteration responses (likely greetings).
+            # Longer responses and all later iterations go through decide_node so the
+            # decider can choose to dispatch visual artifacts instead of a plain text answer.
+            if iteration == 1 and len(content.strip()) < 200:
+                logger.info("discovery_routing", decision="shortcut_decide_node", reason="short_first_response", iteration=iteration)
+                return "shortcut_decide_node"
+            logger.info("discovery_routing", decision="decide_node", reason="text_answer_to_decider", iteration=iteration)
+            return "decide_node"
         logger.info("discovery_routing", decision="decide_node", reason="no_tool_calls_empty_content", iteration=iteration)
         return "decide_node"
 
     # If ONLY tool call is signal_ready_to_decide → go to decide
-    non_ready = [tc for tc in tool_calls if tc["name"] != "signal_ready_to_decide"]
+    non_ready = [tc for tc in tool_calls if tc["name"] not in ("signal_ready_to_decide", "ask_user_during_discovery")]
     if not non_ready:
         logger.info("discovery_routing", decision="decide_node", reason="signal_ready_to_decide", iteration=iteration)
         return "decide_node"
@@ -447,6 +466,8 @@ async def tool_executor_node(state: OrchestratorState, config: RunnableConfig) -
     tool_messages: list[ToolMessage] = []
     new_discovery_results: list[dict] = []
     new_fetched_details: dict = {}  # populated when get_table_details is called
+    new_key_findings: str = ""  # populated when signal_ready_to_decide is called
+    new_ask_user_decide_output: dict = {}  # populated when ask_user_during_discovery is called
 
     for tc in tool_calls:
         tool_name = tc["name"]
@@ -455,8 +476,29 @@ async def tool_executor_node(state: OrchestratorState, config: RunnableConfig) -
 
         if tool_name == "signal_ready_to_decide":
             # Just echo it — routing already handles this
+            # Extract the key-findings reason paragraph and store in state
+            reason = tool_args.get("reason", "")
+            if reason:
+                new_key_findings = reason
             tool_messages.append(ToolMessage(
                 content=json.dumps({"status": "ready"}),
+                tool_call_id=tool_call_id,
+                name=tool_name,
+            ))
+            continue
+
+        if tool_name == "ask_user_during_discovery":
+            # Store the question details in decide_output so ask_user_node can read them.
+            # route_after_discovery routes directly to ask_user_node so this tool message
+            # is added but execution jumps out of tool_executor.
+            new_ask_user_decide_output = {
+                "action": "ask_user",
+                "question": tool_args.get("question", "Could you clarify your question?"),
+                "mode": tool_args.get("mode", "free_text"),
+                "options": tool_args.get("options"),
+            }
+            tool_messages.append(ToolMessage(
+                content=json.dumps({"status": "ask_user_triggered"}),
                 tool_call_id=tool_call_id,
                 name=tool_name,
             ))
@@ -511,6 +553,10 @@ async def tool_executor_node(state: OrchestratorState, config: RunnableConfig) -
         updates["discovery_results"] = state.get("discovery_results", []) + new_discovery_results
     if new_fetched_details:
         updates["fetched_table_details"] = {**state.get("fetched_table_details", {}), **new_fetched_details}
+    if new_key_findings:
+        updates["discovery_key_findings"] = new_key_findings
+    if new_ask_user_decide_output:
+        updates["decide_output"] = new_ask_user_decide_output
 
     logger.info(
         "tool_executor_done",
@@ -618,7 +664,7 @@ async def decide_node(state: OrchestratorState, config: RunnableConfig) -> dict:
         content = content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         decide_output = json.loads(content)
         # Pull LLM-generated title + reasoning out of the JSON output
-        step_title = decide_output.pop("step_title", "")  # remove from output dict — not needed downstream
+        step_title = decide_output.pop("step_title", "")  # remove from output dict
         llm_reasoning = decide_output.pop("reasoning", "")
         # Prefer explicit LLM reasoning over thinking blocks
         if llm_reasoning:
@@ -670,28 +716,57 @@ async def decide_node(state: OrchestratorState, config: RunnableConfig) -> dict:
 
 
 def _summarise_discovery(state: OrchestratorState) -> str:
-    """Build a compact summary of discovery results for the decide prompt."""
+    """Build a rich summary of discovery results for the decide prompt."""
     parts: list[str] = []
 
-    # Discovery query results
+    # Discovery query results (all of them, not just first 3)
     dr = state.get("discovery_results", [])
     if dr:
         parts.append(f"Discovery queries run: {len(dr)}")
-        for r in dr[:3]:  # show first 3
+        for r in dr:  # show ALL queries
             parts.append(f"  - {r.get('label', '')}: {r.get('row_count', '?')} rows")
             prows = r.get("preview_rows", [])
             if prows:
                 parts.append(f"    Sample: {json.dumps(prows[:2])}")
 
-    # Tables viewed
+    # Tables viewed with column count
     ft = state.get("fetched_table_details", {})
     if ft:
-        parts.append(f"Tables examined: {', '.join(ft.keys())}")
+        table_details = []
+        for tname, tinfo in ft.items():
+            ncols = len(tinfo.get("columns", []))
+            table_details.append(f"{tname} ({ncols} columns)")
+        parts.append(f"Tables examined: {', '.join(table_details)}")
+
+    # Business rules fetched during discovery (extracted from ToolMessages)
+    fetched_rules = _extract_fetched_business_rules(state)
+    if fetched_rules:
+        parts.append(f"Business rules fetched: {', '.join(fetched_rules)}")
+
+    # Key-findings paragraph from signal_ready_to_decide
+    key_findings = state.get("discovery_key_findings", "")
+    if key_findings:
+        parts.append(f"\nKey findings from discovery:\n{key_findings}")
 
     if not parts:
         parts.append("No discovery queries run yet — answering from schema context alone.")
 
     return "\n".join(parts)
+
+
+def _extract_fetched_business_rules(state: OrchestratorState) -> list[str]:
+    """Return list of 'rule_id: title' strings fetched via fetch_business_rule during discovery."""
+    fetched: list[str] = []
+    for msg in state.get("discovery_messages", []):
+        if getattr(msg, "name", "") == "fetch_business_rule":
+            try:
+                content = json.loads(msg.content) if isinstance(msg.content, str) else {}
+                for rule_id, rule_data in content.items():
+                    if isinstance(rule_data, dict) and "title" in rule_data:
+                        fetched.append(f"{rule_id}: {rule_data['title']}")
+            except Exception:
+                pass
+    return fetched
 
 
 # ---------------------------------------------------------------------------
@@ -819,9 +894,27 @@ async def ask_user_node(state: OrchestratorState, config: RunnableConfig) -> dic
     ws_send, seq_counter, *_ = await _get_ws(config)
 
     decide_output = state.get("decide_output") or {}
-    question = decide_output.get("question", "Could you clarify your question?")
+    question = decide_output.get("question", "")
     mode = decide_output.get("mode", "free_text")
     options = decide_output.get("options")
+
+    # Handle ask_user_during_discovery path: question lives in the last AI message's tool call
+    tool_call_id = None
+    for msg in reversed(state.get("discovery_messages", [])):
+        for tc in getattr(msg, "tool_calls", []) or []:
+            if tc["name"] == "ask_user_during_discovery":
+                args = tc.get("args", {})
+                if not question:
+                    question = args.get("question", "")
+                    mode = args.get("mode", "free_text")
+                    options = args.get("options") or None
+                tool_call_id = tc.get("id")
+                break
+        if tool_call_id and question:
+            break
+
+    if not question:
+        question = "Could you clarify your question?"
 
     seq = await seq_counter.next()
     await ws_send(make_ask_user(
@@ -844,12 +937,28 @@ async def ask_user_node(state: OrchestratorState, config: RunnableConfig) -> dic
 
     logger.info("ask_user_resumed", chat_id=state["chat_id"])
 
+    # Increment the global ask_user_count (persists across turns via checkpoint)
+    current_count = state.get("ask_user_count", 0)
+
+    # ── Critical: close the pending ask_user_during_discovery tool_use block ──
+    # Anthropic/Bedrock requires a ToolMessage closing every tool_use block before
+    # any subsequent HumanMessage. Without it, every LLM call after resume throws:
+    #   ValidationException: tool_use ids found without tool_result blocks immediately after
+    # which causes the infinite question loop.
+    injected_messages: list = []
+    if tool_call_id:
+        injected_messages.append(ToolMessage(
+            content=json.dumps({"status": "user_answered", "answer": user_answer}),
+            tool_call_id=tool_call_id,
+            name="ask_user_during_discovery",
+        ))
+    injected_messages.append(HumanMessage(content=f"Clarification from user: {user_answer}"))
+
     # Inject the answer back into discovery messages and loop
     return {
         "pending_question": None,
-        "discovery_messages": [
-            HumanMessage(content=f"Clarification from user: {user_answer}")
-        ],
+        "ask_user_count": current_count + 1,
+        "discovery_messages": injected_messages,
     }
 
 
@@ -989,10 +1098,21 @@ async def synthesize_final_node(state: OrchestratorState, config: RunnableConfig
         for r in results
     ], indent=2)
 
+    # Recent conversation context (last 3 turns, compact)
+    recent_context = _format_recent_turns(
+        state.get("recent_turns", [])[-3:]
+    ) if state.get("recent_turns") else "No prior conversation."
+
+    # Key findings from discovery phase
+    key_findings = state.get("discovery_key_findings", "")
+    key_findings_block = f"\nDiscovery key findings:\n{key_findings}" if key_findings else ""
+
     synth_messages = [
         SystemMessage(content=SYNTHESIZE_SYSTEM),
         HumanMessage(content=(
             f"User's original question: {state['user_message']}\n\n"
+            f"Recent conversation context:\n{recent_context}"
+            f"{key_findings_block}\n\n"
             f"Artifact results:\n{results_summary}\n\n"
             'Return JSON: {"markdown": "...", "follow_up_questions": ["...", "...", "..."], "step_title": "...", "reasoning": "..."}'
         )),
@@ -1113,16 +1233,42 @@ async def synthesize_final_node(state: OrchestratorState, config: RunnableConfig
 # Helper: generate follow-up questions for direct responses
 # ---------------------------------------------------------------------------
 
-async def _generate_follow_ups(user_message: str, markdown: str, llm_service: Any, model: str, provider: str | None = None) -> list[str]:
+async def _generate_follow_ups(
+    user_message: str,
+    markdown: str,
+    llm_service: Any,
+    model: str,
+    provider: str | None = None,
+) -> list[str]:
     try:
         response: AIMessage = await llm_service.ainvoke(
             [
-                SystemMessage(content="Generate exactly 2 follow-up questions that naturally extend this analysis. Return only a JSON array of strings: [\"...\", \"...\"]"),
-                HumanMessage(content=f"Question: {user_message}\nAnswer: {markdown[:500]}"),
+                SystemMessage(content=(
+                    "You are generating suggested follow-up questions for a business analytics chat.\n\n"
+                    "These questions will appear as clickable buttons the user can select to run next.\n"
+                    "They must read like something the USER would type — direct, specific, ready to execute.\n\n"
+                    "STRICT RULES:\n"
+                    "  ✓ Write from the user's perspective (e.g. 'Show me revenue by region' not 'Would you like revenue by region?')\n"
+                    "  ✓ Be specific — include metric name, dimension, or time period where relevant\n"
+                    "  ✓ Extend or deepen the current topic (drill down, new dimension, related metric)\n"
+                    "  ✓ GOOD: \"Show me monthly revenue trend for the last 6 months\"\n"
+                    "  ✓ GOOD: \"Which product category had the highest margin last quarter?\"\n"
+                    "  ✓ GOOD: \"Break down customer churn by acquisition channel\"\n"
+                    "  ✗ BAD: \"What metrics would you like to analyze?\" — preference question, NEVER do this\n"
+                    "  ✗ BAD: \"Would you like more details?\" — vague, NEVER do this\n"
+                    "  ✗ BAD: \"What time period are you interested in?\" — meta question, NEVER do this\n"
+                    "  ✗ BAD: \"What specific business metrics or KPIs would you like to analyze first?\" — NEVER\n\n"
+                    "Return ONLY a JSON array of exactly 2 strings: [\"...\", \"...\"]"
+                )),
+                HumanMessage(content=(
+                    f"User's message: {user_message}\n"
+                    f"Nirnaya's response: {markdown[:600]}\n\n"
+                    "Generate 2 ready-to-run follow-up questions the user can click next:"
+                )),
             ],
             model=model,
-            max_tokens=512,
-            temperature=0.5,
+            max_tokens=256,
+            temperature=0.4,
             provider=provider,
         )
         content = response.content if isinstance(response.content, str) else "[]"
@@ -1130,6 +1276,7 @@ async def _generate_follow_ups(user_message: str, markdown: str, llm_service: An
         return json.loads(content)[:3]
     except Exception:
         return []
+
 
 
 # ---------------------------------------------------------------------------
@@ -1173,6 +1320,7 @@ def build_orchestrator_graph(checkpointer: Any = None):
             "tool_executor": "tool_executor",
             "shortcut_decide_node": "shortcut_decide_node",
             "decide_node": "decide_node",
+            "ask_user_node": "ask_user_node",  # ask_user_during_discovery tool path
         },
     )
     graph.add_edge("tool_executor", "discovery_loop")

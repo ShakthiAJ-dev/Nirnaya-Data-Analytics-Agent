@@ -155,15 +155,23 @@ async def get_project_messages(project_id: str, request: Request, redis: RedisDe
             if art_id:
                 # Normalise to match the WS `final` event artifact shape exactly
                 # so FE uses one shared renderer for both live and historical turns.
+                # key_numbers and note are stored inside config JSONB
+                # (no dedicated columns) — extract them for the FE shape.
+                raw_config: dict = art.get("config") or {}
+                key_numbers = raw_config.get("key_numbers") or {}
+                note = raw_config.get("note") or art.get("note") or ""
+                # Strip storage-only fields so config matches the WS final shape
+                clean_config = {k: v for k, v in raw_config.items()
+                                if k not in ("key_numbers", "note")}
                 artifact_map[art_id] = {
-                    "artifact_id":   art_id,                        # key matches WS final
+                    "artifact_id":   art_id,
                     "type":          art.get("type", ""),
                     "title":         art.get("title", ""),
-                    "note":          art.get("note", ""),
-                    "key_numbers":   art.get("key_numbers") or {},
+                    "note":          note,
+                    "key_numbers":   key_numbers,
                     "status":        art.get("status", "fresh"),
                     "error_message": art.get("error_message"),
-                    "config":        art.get("config") or {},
+                    "config":        clean_config,
                     "result_data":   art.get("result_data") or [],
                     "sql_query":     art.get("sql_query", ""),
                 }

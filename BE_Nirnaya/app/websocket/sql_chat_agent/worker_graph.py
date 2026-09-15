@@ -17,7 +17,7 @@ The worker is implemented as a plain async function (not a compiled StateGraph)
 to keep things simple. The orchestrator's run_worker_node calls this function
 and appends the result to orchestrator state via the operator.add reducer.
 
-Max iterations: 6 (prevents infinite loops on bad SQL)
+Max iterations: 8 (prevents infinite loops on bad SQL)
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ def _worker_preamble_text(response) -> str:
 
 logger = get_logger(__name__)
 
-_MAX_WORKER_ITERATIONS = 6
+_MAX_WORKER_ITERATIONS = 8
 
 
 # ---------------------------------------------------------------------------
@@ -96,27 +96,34 @@ async def _promote_artifact(
     """
     artifact_type = finalized.get("artifact_type", "table")
 
+    # key_numbers and note are not columns in artifacts table — store in config
+    # so they survive DB round-trips and are available in history API responses.
+    shared_fields = {
+        "key_numbers": _to_plain_dict(finalized.get("key_numbers", {})),
+        "note":        finalized.get("note", ""),
+    }
+
     config: dict[str, Any] = {}
     if artifact_type == "chart":
         config = {
             "chart_family":  finalized.get("chart_family"),
             "chart_type":    finalized.get("chart_type"),
             "encoding":      _to_plain_dict(finalized.get("encoding")),
-            # Optional display hints — empty dict when LLM didn't populate
             "chart_config":  finalized.get("chart_config") or {},
+            **shared_fields,
         }
     elif artifact_type == "kpi":
         config = {
             "card_type":      finalized.get("card_type"),
             "format":         finalized.get("format"),
-            # Optional display hints — empty dict when LLM didn't populate
             "display_config": finalized.get("display_config") or {},
+            **shared_fields,
         }
     elif artifact_type == "table":
         config = {
-            "columns":       _to_plain_dict(finalized.get("columns", [])),
-            # Optional table-level settings — empty dict when LLM didn't populate
-            "table_config":  finalized.get("table_config") or {},
+            "columns":      _to_plain_dict(finalized.get("columns", [])),
+            "table_config": finalized.get("table_config") or {},
+            **shared_fields,
         }
 
 
@@ -177,6 +184,7 @@ async def run_worker(
     schema_name = worker_state["schema_name"]
     full_metadata = cfg["full_metadata"]
 
+    has_business_rules = bool(cfg.get("business_rules_index", worker_state.get("relevant_business_rule_ids", [])))
     worker_tools = create_worker_tools(
         schema_name=schema_name,
         full_metadata=full_metadata,
@@ -184,6 +192,8 @@ async def run_worker(
         worker_id=worker_id,
         supabase_service=supabase_service,
         redis_service=redis_service,
+        artifact_type=artifact_type,
+        has_business_rules=has_business_rules,
     )
     tool_map = {t.name: t for t in worker_tools}
 

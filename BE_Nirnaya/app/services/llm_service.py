@@ -299,9 +299,24 @@ class LLMService:
         from langchain_core.messages import HumanMessage, SystemMessage
 
         system_prompt = (
-            "Generate a concise project title of 3 to 6 words in title case. "
-            "No punctuation, no explanation, no quotes. "
-            "Output ONLY the title and nothing else."
+            "You are a title generator. Your ONLY job is to output a short chat title.\n\n"
+            "STRICT RULES — no exceptions:\n"
+            "  1. Output EXACTLY 3 to 6 words. No more, no fewer.\n"
+            "  2. Title Case only (capitalize each major word).\n"
+            "  3. Zero punctuation — no periods, commas, question marks, colons, quotes.\n"
+            "  4. Zero explanation — do not say anything except the title itself.\n"
+            "  5. If the input is a greeting (e.g. 'hi', 'hello'), output: New Conversation\n"
+            "  6. The title must describe what the user wants to do, not answer their question.\n\n"
+            "BAD outputs (NEVER do these):\n"
+            "  - \"I need more information to help you...\"\n"
+            "  - \"Sure! Here is a title:\"\n"
+            "  - Any sentence, any question, any explanation\n\n"
+            "GOOD outputs:\n"
+            "  - Revenue Analysis By Region\n"
+            "  - Monthly Sales Performance Review\n"
+            "  - Customer Churn Rate Trends\n"
+            "  - New Conversation\n\n"
+            "Output the title now. Nothing else."
         )
 
         actual_provider = provider or _detect_provider("")  # default openai, but overridden below
@@ -351,11 +366,18 @@ class LLMService:
             )
 
         try:
+            # Wrap the user message in a labelled block so the LLM sees it as input to title,
+            # not as a question addressed to it.
+            human_content = (
+                f"User message to title:\n\"\"\"\n{user_message[:300]}\n\"\"\"\n\n"
+                "Generate the title now (3-6 words, Title Case, no punctuation, nothing else):"
+            )
             messages = [
                 SystemMessage(content=system_prompt),
-                HumanMessage(content=user_message[:300]),
+                HumanMessage(content=human_content),
             ]
             response = await llm.ainvoke(messages)  # type: ignore[assignment]
+
             title = _normalize_content(response.content).strip().strip('"\'')
             logger.info("generate_title_success", provider=actual_provider, title=title)
             return title

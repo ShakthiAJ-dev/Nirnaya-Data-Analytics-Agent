@@ -15,7 +15,6 @@ import {
   CheckCircle,
   AlertCircle,
   Sparkles,
-  HelpCircle,
   ArrowUpRight,
   Trash2,
   MoreVertical,
@@ -85,7 +84,8 @@ const TurnMetaRow: React.FC<{
   const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
   const [elapsed, setElapsed] = useState<string>('');
 
-  const isLive = isLoading && isLast;
+  // Stay live while loading OR while graph is paused waiting for ask_user answer
+  const isLive = (isLoading && isLast) || Boolean(msg.askUser);
   const hasSteps = Boolean(msg.steps && msg.steps.length > 0);
   const hasMeta = hasSteps || Boolean(msg.executionTimeMs);
 
@@ -116,43 +116,47 @@ const TurnMetaRow: React.FC<{
     // Show all accumulated steps while processing — each is expandable for reasoning
     return (
       <div className="turn-meta-row">
-        <div className="turn-meta-live" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px', padding: '8px 10px' }}>
+        <div className="turn-meta-live" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px', padding: '10px 12px' }}>
           {/* Spinner + current label */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%' }}>
             <span className="turn-meta-spinner" />
-            <span className="turn-meta-step-label">
+            <span className="turn-meta-step-label" style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-secondary)' }}>
               {currentStep ? currentStep.title : 'Thinking…'}
             </span>
             {elapsed && <span className="turn-meta-elapsed" style={{ marginLeft: 'auto' }}>{elapsed}</span>}
           </div>
-          {/* All prior completed steps — accumulated, each expandable */}
+          {/* All accumulated steps — each expandable for reasoning */}
           {sortedSteps.length > 0 && (
-            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '2px', paddingLeft: '20px' }}>
+            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1px', paddingLeft: '18px', borderLeft: '1px solid rgba(255,255,255,0.06)' }}>
               {sortedSteps.map((step) => (
                 <React.Fragment key={step.seq}>
                   <div
                     style={{
-                      display: 'flex', alignItems: 'center', gap: '6px',
-                      fontSize: '11.5px', color: step.status === 'in_progress' ? 'var(--text-secondary)' : 'var(--text-muted)',
+                      display: 'flex', alignItems: 'center', gap: '7px',
+                      fontSize: '12.5px', color: step.status === 'in_progress' ? 'var(--text-secondary)' : 'var(--text-muted)',
                       cursor: step.reasoning ? 'pointer' : 'default',
-                      padding: '2px 0',
+                      padding: '3px 4px', borderRadius: '4px',
+                      transition: 'background 0.12s',
+                      minWidth: 0, overflow: 'hidden',
                     }}
                     onClick={() => step.reasoning && toggleStep(step.seq)}
+                    onMouseEnter={(e) => step.reasoning && ((e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.04)')}
+                    onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
                   >
                     {step.status === 'in_progress' ? (
                       <span className="thinking-spin-icon" style={{ width: '10px', height: '10px', flexShrink: 0 }} />
                     ) : step.status === 'error' ? (
-                      <AlertCircle size={10} style={{ color: '#ef4444', flexShrink: 0 }} />
+                      <AlertCircle size={11} style={{ color: '#ef4444', flexShrink: 0 }} />
                     ) : (
-                      <CheckCircle size={10} style={{ color: '#10b981', flexShrink: 0 }} />
+                      <CheckCircle size={11} style={{ color: '#10b981', flexShrink: 0 }} />
                     )}
-                    <span>{step.title}</span>
-                    {step.detail && <span style={{ opacity: 0.55 }}>— {step.detail}</span>}
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{step.title}</span>
+                    {step.detail && <span style={{ opacity: 0.5, fontSize: '11.5px', flexShrink: 0 }}>{step.detail}</span>}
                     {step.reasoning && (
                       <ChevronDown
-                        size={9}
+                        size={10}
                         style={{
-                          marginLeft: 'auto', flexShrink: 0, color: 'var(--text-muted)',
+                          flexShrink: 0, color: 'var(--text-muted)',
                           transform: expandedSteps.has(step.seq) ? 'rotate(180deg)' : 'none',
                           transition: 'transform 0.2s ease',
                         }}
@@ -160,8 +164,8 @@ const TurnMetaRow: React.FC<{
                     )}
                   </div>
                   {expandedSteps.has(step.seq) && step.reasoning && (
-                    <div className="turn-meta-step-reasoning" style={{ marginLeft: '16px', marginBottom: '2px' }}>
-                      {step.reasoning}
+                    <div className="turn-meta-step-reasoning">
+                      <MarkdownContent text={step.reasoning} />
                     </div>
                   )}
                 </React.Fragment>
@@ -217,12 +221,12 @@ const TurnMetaRow: React.FC<{
                 ) : (
                   <CheckCircle size={11} style={{ color: '#10b981', flexShrink: 0 }} />
                 )}
-                <span>{step.title}</span>
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{step.title}</span>
+                {step.detail && <span style={{ opacity: 0.45, fontSize: '11px', flexShrink: 0 }}>{step.detail}</span>}
                 {step.reasoning && (
                   <ChevronDown
                     size={9}
                     style={{
-                      marginLeft: 'auto',
                       flexShrink: 0,
                       color: 'var(--text-muted)',
                       transform: expandedSteps.has(step.seq) ? 'rotate(180deg)' : 'none',
@@ -232,7 +236,9 @@ const TurnMetaRow: React.FC<{
                 )}
               </div>
               {expandedSteps.has(step.seq) && step.reasoning && (
-                <div className="turn-meta-step-reasoning">{step.reasoning}</div>
+                <div className="turn-meta-step-reasoning">
+                  <MarkdownContent text={step.reasoning} />
+                </div>
               )}
             </React.Fragment>
           ))}
@@ -243,155 +249,6 @@ const TurnMetaRow: React.FC<{
 };
 
 // ---------------------------------------------------------------------------
-// AskUserBlock (Claude-Style Checkpoint Clarification)
-// ---------------------------------------------------------------------------
-
-const AskUserBlock: React.FC<{
-  askUser: AskUserEvent & { answeredAnswer?: string };
-  onResponse: (turnId: string, answer: string, modelId: string) => void;
-  modelId: string;
-}> = ({ askUser, onResponse, modelId }) => {
-  const [freeText, setFreeText] = useState('');
-  const [submittedAnswer, setSubmittedAnswer] = useState<string | null>(
-    askUser.answeredAnswer || null
-  );
-
-  useEffect(() => {
-    if (askUser.answeredAnswer) {
-      setSubmittedAnswer(askUser.answeredAnswer);
-    }
-  }, [askUser.answeredAnswer]);
-
-  const submit = (answer: string) => {
-    if (!answer.trim() || submittedAnswer) return;
-    setSubmittedAnswer(answer);
-    onResponse(askUser.turn_id, answer, modelId);
-  };
-
-  const isAnswered = Boolean(submittedAnswer);
-
-  return (
-    <div className={`claude-ask-container ${isAnswered ? 'is-answered' : ''}`}>
-      <div className="claude-ask-header">
-        <div className="claude-ask-badge">
-          <HelpCircle size={13} className="claude-ask-icon" />
-          <span>Clarification Required</span>
-        </div>
-        {askUser.timeout_seconds && !isAnswered ? (
-          <span className="claude-ask-timer">
-            Auto-skips in {askUser.timeout_seconds}s
-          </span>
-        ) : null}
-      </div>
-
-      <div className="claude-ask-question">
-        {askUser.question}
-      </div>
-
-      {askUser.mode === 'mcq' && askUser.options ? (
-        <div className="claude-choices-stack">
-          {askUser.options.map((opt, i) => {
-            const letter = String.fromCharCode(65 + i);
-            const isChosen = submittedAnswer === opt;
-            const isOther = isAnswered && !isChosen;
-
-            return (
-              <button
-                key={i}
-                type="button"
-                className={`claude-choice-card ${isChosen ? 'selected' : ''} ${isOther ? 'dimmed' : ''}`}
-                onClick={() => submit(opt)}
-                disabled={isAnswered}
-              >
-                <span className="claude-choice-badge">{letter}</span>
-                <span className="claude-choice-label">{opt}</span>
-                <div className="claude-choice-indicator">
-                  {isChosen ? (
-                    <Check size={13} className="claude-check-icon" />
-                  ) : (
-                    <span className="claude-radio-dot" />
-                  )}
-                </div>
-              </button>
-            );
-          })}
-
-          <div className="claude-ask-footer">
-            <button
-              type="button"
-              className={`claude-skip-btn ${submittedAnswer === 'skip' ? 'selected' : ''}`}
-              onClick={() => submit('skip')}
-              disabled={isAnswered}
-            >
-              {submittedAnswer === 'skip' ? (
-                <>
-                  <Check size={12} />
-                  <span>Skipped — proceeding with default strategy</span>
-                </>
-              ) : (
-                <>
-                  <span>Skip and continue with defaults</span>
-                  <ArrowRight size={12} />
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="claude-free-input-wrap">
-          <div className="claude-input-row">
-            <input
-              className="claude-ask-input"
-              placeholder="Type your clarification…"
-              value={freeText}
-              onChange={(e) => setFreeText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  submit(freeText);
-                }
-              }}
-              disabled={isAnswered}
-              autoFocus={!isAnswered}
-            />
-            <button
-              type="button"
-              className="claude-submit-btn"
-              onClick={() => submit(freeText)}
-              disabled={isAnswered || !freeText.trim()}
-            >
-              <span>Submit</span>
-              <ArrowRight size={13} />
-            </button>
-          </div>
-          <div className="claude-ask-footer">
-            <button
-              type="button"
-              className={`claude-skip-btn ${submittedAnswer === 'skip' ? 'selected' : ''}`}
-              onClick={() => submit('skip')}
-              disabled={isAnswered}
-            >
-              {submittedAnswer === 'skip' ? (
-                <>
-                  <Check size={12} />
-                  <span>Skipped — proceeding with default strategy</span>
-                </>
-              ) : (
-                <>
-                  <span>Skip and continue with defaults</span>
-                  <ArrowRight size={12} />
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-
-// ---------------------------------------------------------------------------
 // ChatArea
 // ---------------------------------------------------------------------------
 
@@ -400,7 +257,7 @@ interface ChatAreaProps {
   /** The raw project ID from App state — null means no project selected */
   currentProjectId: string | null;
   messages: Message[];
-  selectedModelId: string;
+  selectedModelId?: string;
   isLoading: boolean;
   isDataLoaded?: boolean;
   pendingDatabaseName?: string;
@@ -414,13 +271,14 @@ interface ChatAreaProps {
   onDeleteMessage?: (messageId: string) => void;
   /** Chat input rendered below messages, scoped to messages column only */
   renderInput?: React.ReactNode;
+  /** The active unanswered ask_user (passed to suppress bubble rendering — overlay is in ChatInput) */
+  activeAskUser?: AskUserEvent | null;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
   currentProject,
   currentProjectId,
   messages,
-  selectedModelId,
   isLoading,
   isDataLoaded = false,
   pendingDatabaseName,
@@ -429,7 +287,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onSendSuggestedPrompt,
   availableModels = [],
   onOpenCredentials,
-  onAskUserResponse,
   onDeleteMessage,
   renderInput,
 }) => {
@@ -643,92 +500,93 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 const isMenuOpen = openMenuMsgId === pairedAssistantId;
                 const isThisDeleting = pairedAssistantId ? deletingMsgId === pairedAssistantId : false;
 
-                return (
-                  <div key={msg.id} className="message-row message-row-user" style={{ alignItems: 'flex-start', gap: '8px' }}>
-                    {/* 3-dot menu — sits to the LEFT of the bubble (before it in RTL layout), outside */}
-                    {onDeleteMessage && pairedAssistantId && (
-                      <div
-                        ref={isMenuOpen ? menuRef : undefined}
-                        style={{ position: 'relative', flexShrink: 0, alignSelf: 'flex-start', marginTop: '8px' }}
-                      >
-                        <button
-                          type="button"
-                          title="Message options"
-                          onClick={() => setOpenMenuMsgId(isMenuOpen ? null : pairedAssistantId)}
-                          style={{
-                            background: 'none', border: 'none', cursor: 'pointer',
-                            color: 'var(--text-muted)', padding: '4px', borderRadius: '5px',
-                            display: 'flex', alignItems: 'center',
-                            opacity: isMenuOpen ? 1 : 0.5,
-                            transition: 'opacity 0.15s ease',
-                          }}
-                          onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
-                          onMouseLeave={(e) => (e.currentTarget.style.opacity = isMenuOpen ? '1' : '0.5')}
-                        >
-                          <MoreVertical size={15} />
-                        </button>
-                        {/* Dropdown */}
-                        {isMenuOpen && (
-                          <div
-                            style={{
-                              position: 'absolute', right: 0, top: '28px',
-                              background: 'var(--bg-secondary, #1e2a3a)',
-                              border: '1px solid rgba(255,255,255,0.1)',
-                              borderRadius: '8px', boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-                              minWidth: '160px', zIndex: 100, overflow: 'hidden',
-                              padding: '4px',
-                            }}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteMsg(pairedAssistantId)}
-                              disabled={isThisDeleting}
-                              style={{
-                                display: 'flex', alignItems: 'center', gap: '8px',
-                                width: '100%', padding: '8px 10px',
-                                background: 'none', border: 'none',
-                                borderRadius: '6px',
-                                color: '#f87171', cursor: isThisDeleting ? 'not-allowed' : 'pointer',
-                                fontSize: '12.5px', fontWeight: 500,
-                                transition: 'background 0.15s ease',
-                              }}
-                              onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(239,68,68,0.12)')}
-                              onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
-                            >
-                              <Trash2 size={13} />
-                              <span>{isThisDeleting ? 'Deleting…' : 'Delete this turn'}</span>
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="message-bubble-user-wrap" style={{ flex: 1 }}>
-                      <div className="user-bubble">
-                        <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{msg.content}</p>
-                        {msg.files && msg.files.length > 0 && (
-                          <div className="user-attachments-container">
-                            {msg.files.map((file) => (
-                              <span key={file.id} className="attachment-tag">
-                                {file.extension === 'csv' || file.extension === 'xlsx' ? (
-                                  <FileSpreadsheet size={12} />
-                                ) : (
-                                  <FileText size={12} />
-                                )}
-                                <span>{file.name}</span>
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      <div className="message-meta-right">
-                        <Clock size={11} />
-                        <span>{msg.timestamp}</span>
-                        <span>• You</span>
-                      </div>
+              return (
+                <div key={msg.id} className="message-row message-row-user" style={{ alignItems: 'flex-start', gap: '8px' }}>
+                  {/* User bubble */}
+                  <div className="message-bubble-user-wrap" style={{ flex: 1 }}>
+                    <div className="user-bubble">
+                      <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{msg.content}</p>
+                      {msg.files && msg.files.length > 0 && (
+                        <div className="user-attachments-container">
+                          {msg.files.map((file) => (
+                            <span key={file.id} className="attachment-tag">
+                              {file.extension === 'csv' || file.extension === 'xlsx' ? (
+                                <FileSpreadsheet size={12} />
+                              ) : (
+                                <FileText size={12} />
+                              )}
+                              <span>{file.name}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="message-meta-right">
+                      <Clock size={11} />
+                      <span>{msg.timestamp}</span>
+                      <span>• You</span>
                     </div>
                   </div>
-                );
+
+                  {/* 3-dot menu — RIGHT of user bubble */}
+                  {onDeleteMessage && pairedAssistantId && (
+                    <div
+                      ref={isMenuOpen ? menuRef : undefined}
+                      style={{ position: 'relative', flexShrink: 0, alignSelf: 'flex-start', marginTop: '8px' }}
+                    >
+                      <button
+                        type="button"
+                        title="Message options"
+                        onClick={() => setOpenMenuMsgId(isMenuOpen ? null : pairedAssistantId)}
+                        style={{
+                          background: 'none', border: 'none', cursor: 'pointer',
+                          color: 'var(--text-muted)', padding: '4px', borderRadius: '5px',
+                          display: 'flex', alignItems: 'center',
+                          opacity: isMenuOpen ? 1 : 0.5,
+                          transition: 'opacity 0.15s ease',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                        onMouseLeave={(e) => (e.currentTarget.style.opacity = isMenuOpen ? '1' : '0.5')}
+                      >
+                        <MoreVertical size={15} />
+                      </button>
+                      {/* Dropdown */}
+                      {isMenuOpen && (
+                        <div
+                          style={{
+                            position: 'absolute', right: 0, top: '28px',
+                            background: 'var(--bg-secondary, #1e2a3a)',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            borderRadius: '8px', boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+                            minWidth: '160px', zIndex: 100, overflow: 'hidden',
+                            padding: '4px',
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteMsg(pairedAssistantId)}
+                            disabled={isThisDeleting}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: '8px',
+                              width: '100%', padding: '8px 10px',
+                              background: 'none', border: 'none',
+                              borderRadius: '6px',
+                              color: '#f87171', cursor: isThisDeleting ? 'not-allowed' : 'pointer',
+                              fontSize: '12.5px', fontWeight: 500,
+                              transition: 'background 0.15s ease',
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(239,68,68,0.12)')}
+                            onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                          >
+                            <Trash2 size={13} />
+                            <span>{isThisDeleting ? 'Deleting…' : 'Delete this turn'}</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
               }
 
               // Assistant message — wrap in Fragment so TurnMetaRow is a sibling
@@ -740,7 +598,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
               // During streaming: TurnMetaRow handles the live step display.
               // Hide the full logo+bubble until we have final content.
-              const showAssistantBubble = hasContent || (!isThisLoading && (hasSteps || freshArtifacts.length > 0));
+              // Also hide when ask_user is active (unanswered) — no empty bubble.
+              const hasActiveAskUser = Boolean(msg.askUser && !msg.askUser.answeredAnswer);
+              const showAssistantBubble = !hasActiveAskUser && (hasContent || (!isThisLoading && (hasSteps || freshArtifacts.length > 0)));
 
               return (
                 <React.Fragment key={msg.id}>
@@ -756,15 +616,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       </div>
                       <div className="assistant-content-box">
                         <div className="assistant-bubble">
-                          {/* Claude-style Checkpoint Clarification block */}
-                          {msg.askUser && onAskUserResponse && (
-                            <AskUserBlock
-                              askUser={msg.askUser}
-                              onResponse={onAskUserResponse}
-                              modelId={selectedModelId}
-                            />
-                          )}
-
                           {/* Final answer */}
                           {hasContent && <MarkdownContent text={msg.content} />}
 

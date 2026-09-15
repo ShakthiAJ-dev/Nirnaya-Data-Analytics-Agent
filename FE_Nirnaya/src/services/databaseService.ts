@@ -103,6 +103,14 @@ export const databaseService = {
     return databaseService.processUpload(databaseId, file_path, file.name);
   },
 
+  updateTableMetadata: async (databaseId: string, tableName: string, updates: Record<string, unknown>): Promise<any> => {
+    const res = await api.patch<{ success: boolean; data: any }>(
+      `/databases/${databaseId}/tables/${encodeURIComponent(tableName)}/metadata`,
+      updates,
+    );
+    return res.data;
+  },
+
   deleteTable: async (databaseId: string, tableName: string): Promise<void> => {
     await api.delete(`/databases/${databaseId}/tables/${encodeURIComponent(tableName)}`);
   },

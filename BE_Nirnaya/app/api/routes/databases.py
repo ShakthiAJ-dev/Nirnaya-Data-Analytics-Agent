@@ -220,6 +220,29 @@ async def update_business_rules(
     )
 
 
+@router.patch(
+    "/databases/{database_id}/tables/{table_name}/metadata",
+    status_code=status.HTTP_200_OK,
+    summary="Update editable metadata fields for a table",
+    description="Update LLM-generated fields (overview, use_case, grain, etc.) for a table. Factual stats are read-only.",
+)
+async def update_table_metadata(
+    database_id: str,
+    table_name: str,
+    request: Request,
+    redis: RedisDep,
+) -> JSONResponse:
+    body = await request.json()
+    session_id, _ = await _require_session(request, redis)
+    table_meta = await DatabaseService(session_id, _supabase(request)).update_table_metadata(
+        database_id.strip(), table_name.strip(), body
+    )
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"success": True, "data": table_meta, "message": "Table metadata updated."},
+    )
+
+
 @router.delete(
     "/databases/{database_id}/tables/{table_name}",
     status_code=status.HTTP_200_OK,

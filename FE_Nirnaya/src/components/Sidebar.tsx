@@ -11,8 +11,9 @@ import {
   Sparkles,
   PanelLeftClose,
   PanelLeftOpen,
+  Loader2,
 } from 'lucide-react';
-import { NirnayaLogo } from './Logo';
+import { NirnayaLogo, LogoEmblem } from './Logo';
 import { DatabaseTablesModal } from './DatabaseTablesModal';
 import type { Project, Database as DatabaseType, LLMCredentials } from '../types';
 
@@ -30,6 +31,7 @@ interface SidebarProps {
   onNewDatabase: () => void;
   onDeleteDatabase: (databaseId: string, e: React.MouseEvent) => void;
   onUploadToDatabase: (databaseId: string) => void;
+  uploadingDbId?: string;
   onOpenCredentials: () => void;
   onAddDemo: () => void;
   onTableDeleted?: () => void;
@@ -59,6 +61,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onNewDatabase,
   onDeleteDatabase,
   onUploadToDatabase,
+  uploadingDbId,
   onOpenCredentials,
   onAddDemo,
   onTableDeleted,
@@ -132,9 +135,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside
       className="nirnaya-sidebar"
       style={{
-        width: collapsed ? '52px' : `${sidebarWidth}px`,
-        minWidth: collapsed ? '52px' : `${MIN_WIDTH}px`,
-        maxWidth: collapsed ? '52px' : `${MAX_WIDTH}px`,
+        width: collapsed ? '64px' : `${sidebarWidth}px`,
+        minWidth: collapsed ? '64px' : `${MIN_WIDTH}px`,
+        maxWidth: collapsed ? '64px' : `${MAX_WIDTH}px`,
         overflow: 'hidden',
         transition: isDraggingRef.current ? 'none' : 'width 0.2s ease',
         position: 'relative',
@@ -142,21 +145,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }}
     >
       {/* Brand Header */}
-      <div className="sidebar-header" style={{ justifyContent: collapsed ? 'center' : 'space-between' }}>
-        {/* Logo — hidden when collapsed to save space */}
-        {!collapsed && (
-          <button
-            type="button"
-            onClick={onGoHome}
-            title="Go to home"
-            style={{
-              background: 'none', border: 'none', cursor: onGoHome ? 'pointer' : 'default',
-              padding: 0, display: 'flex', alignItems: 'center', flexShrink: 0,
-            }}
-          >
-            <NirnayaLogo size={32} />
-          </button>
-        )}
+      <div className="sidebar-header" style={{ justifyContent: 'space-between' }}>
+        {/* Logo — always visible; smaller when collapsed */}
+        <button
+          type="button"
+          onClick={onGoHome}
+          title="Go to home"
+          style={{
+            background: 'none', border: 'none', cursor: onGoHome ? 'pointer' : 'default',
+            padding: 0, display: 'flex', alignItems: 'center', flexShrink: 0,
+          }}
+        >
+          {collapsed ? <LogoEmblem size={22} /> : <NirnayaLogo size={32} />}
+        </button>
         {/* Collapse / expand toggle — always visible */}
         <button
           type="button"
@@ -203,6 +204,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             isActive={pendingDatabaseId === db.id}
             hovered={dbHovered === db.id}
             isLocked={isInsideProject}
+            isUploading={uploadingDbId === db.id}
             onMouseEnter={() => setDbHovered(db.id)}
             onMouseLeave={() => setDbHovered(null)}
             onSelect={() => !isInsideProject && onSelectDatabase?.(db.id)}
@@ -377,6 +379,7 @@ interface DbCardProps {
   hovered: boolean;
   /** When true the database cannot be switched — user is inside a project */
   isLocked?: boolean;
+  isUploading?: boolean;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
   onViewTables: (e: React.MouseEvent) => void;
@@ -386,7 +389,7 @@ interface DbCardProps {
 }
 
 const DbCard: React.FC<DbCardProps> = ({
-  name, tableCount, isActive, hovered, isLocked,
+  name, tableCount, isActive, hovered, isLocked, isUploading,
   onMouseEnter, onMouseLeave, onViewTables, onSelect, onUpload, onDelete,
 }) => (
   <div
@@ -411,16 +414,26 @@ const DbCard: React.FC<DbCardProps> = ({
       }} title={name}>
         {name}
       </span>
-      <span style={{
-        fontSize: '10px', padding: '1px 6px', borderRadius: '8px', flexShrink: 0,
-        background: 'rgba(6,182,212,0.12)', color: 'var(--accent-cyan)',
-        fontWeight: 600, whiteSpace: 'nowrap',
-      }}>
-        {tableCount} {tableCount === 1 ? 'table' : 'tables'}
-      </span>
+      {isUploading ? (
+        <Loader2
+          size={11}
+          style={{
+            color: 'var(--accent-cyan)', flexShrink: 0,
+            animation: 'spin 0.8s linear infinite',
+          }}
+        />
+      ) : (
+        <span style={{
+          fontSize: '10px', padding: '1px 6px', borderRadius: '8px', flexShrink: 0,
+          background: 'rgba(6,182,212,0.12)', color: 'var(--accent-cyan)',
+          fontWeight: 600, whiteSpace: 'nowrap',
+        }}>
+          {tableCount} {tableCount === 1 ? 'table' : 'tables'}
+        </span>
+      )}
     </div>
 
-    <div style={{ display: 'flex', gap: '3px', flexShrink: 0, visibility: hovered ? 'visible' : 'hidden' }}>
+    <div style={{ display: 'flex', gap: '3px', flexShrink: 0, visibility: hovered && !isUploading ? 'visible' : 'hidden' }}>
       <button
         type="button"
         title="View tables"

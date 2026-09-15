@@ -927,8 +927,10 @@ class DatabaseService:
                 col_lines = []
                 for c in qs["columns"]:
                     line = f"  - {c['name']} ({c['data_type']}, class={c['type_class']}, nullable={c['nullable']}, unique_values_count={c.get('unique_values_count', '?')}, null_count={c.get('null_count', '?')})"
-                    if "min" in c:
+                    if "avg" in c:
                         line += f", min={c['min']}, max={c['max']}, avg={c['avg']}"
+                    elif "min" in c:
+                        line += f", min={c['min']}, max={c['max']}"
                     if "unique_values" in c:
                         vals = c["unique_values"][:10]
                         line += f", sample_values={vals}"
@@ -1015,6 +1017,52 @@ class DatabaseService:
         except Exception as exc:
             logger.warning("get_metadata_failed", database_id=database_id, error=str(exc))
             return None
+
+    async def update_table_metadata(
+        self,
+        database_id: str,
+        table_name: str,
+        updates: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Update editable LLM-generated fields for a single table in the metadata JSON.
+        Factual fields (row_count, column_count, columns, sample_rows) are not editable.
+        Returns the updated table metadata dict.
+        """
+        EDITABLE_FIELDS = {
+            "overview", "use_case", "grain", "domain_tags", "key_columns",
+            "currency", "timezone", "tenant_column", "key_notes", "pii_columns",
+        }
+        db = await self.get_database(database_id)
+        path = db.get("metadata_path")
+        if not path:
+            raise NotFoundException(f"No metadata found for database {database_id!r}.")
+
+        metadata = await self.get_metadata(database_id)
+        if metadata is None:
+            raise NotFoundException("Metadata file not found in storage.")
+
+        tables = metadata.get("tables", {})
+        if table_name not in tables:
+            raise NotFoundException(f"Table {table_name!r} not found in metadata.")
+
+        filtered = {k: v for k, v in updates.items() if k in EDITABLE_FIELDS}
+        tables[table_name].update(filtered)
+        metadata["tables"] = tables
+
+        try:
+            await self._supa.upload_file(
+                BUCKET,
+                path,
+                json.dumps(metadata, indent=2, default=str).encode("utf-8"),
+                content_type="application/json",
+                upsert=True,
+            )
+        except Exception as exc:
+            raise DatabaseException(f"Failed to update table metadata: {exc}") from exc
+
+        logger.info("table_metadata_updated", database_id=database_id, table=table_name, fields=list(filtered.keys()))
+        return tables[table_name]
 
     async def update_business_rules(
         self,
