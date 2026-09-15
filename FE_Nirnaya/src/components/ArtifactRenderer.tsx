@@ -122,12 +122,12 @@ const NumTick: React.FC<any> = ({ x, y, payload }) => {
 // Config interfaces (mirrors BE contracts)
 // ---------------------------------------------------------------------------
 interface ChartEncoding {
-  x?: { field: string; label?: string };
-  y?: { field: string; label?: string };
-  series?: { field: string };
-  size?: { field: string };
-  category?: { field: string };
-  value?: { field: string };
+  x?: string;
+  y?: string;
+  series?: string;
+  size?: string;
+  category?: string;
+  value?: string;
 }
 
 interface ChartCfg {
@@ -373,10 +373,12 @@ const MiniChart: React.FC<{ a: Artifact }> = ({ a }) => {
   const enc: ChartEncoding = config.encoding || {};
   const data = (a.result_data || []).slice(0, 12);
 
-  const xF = enc.x?.field || (data[0] ? Object.keys(data[0])[0] : "");
-  const yF = enc.y?.field || (data[0] ? Object.keys(data[0])[1] : "");
-  const catF = enc.category?.field || xF;
-  const valF = enc.value?.field || yF;
+  const ccfgMini = config.chart_config || {};
+  const isHMini = ccfgMini.orientation === "horizontal";
+  const xF = enc.x || (data[0] ? Object.keys(data[0])[0] : "");
+  const yF = enc.y || (data[0] ? Object.keys(data[0])[1] : "");
+  const catF = enc.category || xF;
+  const valF = enc.value || yF;
 
   if (!data.length) {
     return <div className="artifact-mini-empty">No data</div>;
@@ -488,12 +490,12 @@ const MiniChart: React.FC<{ a: Artifact }> = ({ a }) => {
   // Default: bar
   return (
     <ResponsiveContainer width="100%" height={68}>
-      <BarChart data={data} margin={margin} barCategoryGap="25%">
+      <BarChart data={data} margin={margin} barCategoryGap="25%" layout={isHMini ? "vertical" : "horizontal"}>
         <Bar
-          dataKey={yF}
+          dataKey={isHMini ? xF : yF}
           fill={P[0]}
           isAnimationActive={false}
-          radius={[1, 1, 0, 0]}
+          radius={isHMini ? [0, 1, 1, 0] : [1, 1, 0, 0]}
         />
       </BarChart>
     </ResponsiveContainer>
@@ -693,20 +695,20 @@ const FullChart: React.FC<{ a: Artifact }> = ({ a }) => {
   const ccfg: ChartCfg = cfg.chart_config || {};
   const data = a.result_data || [];
 
-  const xF = enc.x?.field || (data[0] ? Object.keys(data[0])[0] : "");
-  const yF = enc.y?.field || (data[0] ? Object.keys(data[0])[1] : "");
-  const sF = enc.series?.field;
-  const catF = enc.category?.field || xF;
-  const valF = enc.value?.field || yF;
-  const szF = enc.size?.field;
+  const xF = enc.x || (data[0] ? Object.keys(data[0])[0] : "");
+  const yF = enc.y || (data[0] ? Object.keys(data[0])[1] : "");
+  const sF = enc.series;
+  const catF = enc.category || xF;
+  const valF = enc.value || yF;
+  const szF = enc.size;
 
   const isH = ccfg.orientation === "horizontal";
   const showLeg = ccfg.show_legend !== false && data.length > 0;
   const showGrid = ccfg.show_grid !== false;
   const showLabels = ccfg.show_data_labels === true;
   const sortedData = useMemo(
-    () => sortRows(data, yF, ccfg.sort_order || "none"),
-    [data, yF, ccfg.sort_order],
+    () => sortRows(data, isH ? xF : yF, ccfg.sort_order || "none"),
+    [data, isH, xF, yF, ccfg.sort_order],
   );
   const lineDash =
     ccfg.line_style === "dashed"
@@ -739,7 +741,7 @@ const FullChart: React.FC<{ a: Artifact }> = ({ a }) => {
       };
   const yAxisProps = isH
     ? {
-        dataKey: xF,
+        dataKey: yF,
         type: "category" as const,
         tick: <YTick />,
         axisLine: AX.axisLine,
@@ -1000,78 +1002,120 @@ const FullChart: React.FC<{ a: Artifact }> = ({ a }) => {
         data={sortedData}
         xF={xF}
         yF={yF}
-        valF={enc.value?.field || ""}
+        valF={enc.value || ""}
       />
     );
   }
 
   // --- Grouped / Stacked bar with series ---
-  if ((ct === "grouped_bar" || ct === "stacked_bar") && sF) {
-    const { rows, keys } = pivotSeries(sortedData, xF, yF, sF);
+  if (ct === "grouped_bar" || ct === "stacked_bar") {
     const stackId = ct === "stacked_bar" ? "s" : undefined;
     const stackTypePct = ccfg.stack_type === "percent";
-    return (
-      <ResponsiveContainer width="100%" height={320}>
-        <BarChart
-          data={rows}
-          margin={margin}
-          layout={isH ? "vertical" : "horizontal"}
-          stackOffset={stackTypePct ? "expand" : undefined}
-        >
-          {showGrid && <CartesianGrid {...GRID} />}
-          <XAxis {...xAxisProps} />
-          <YAxis
-            {...yAxisProps}
-            tickFormatter={
-              !isH && stackTypePct
-                ? (v) => `${(v * 100).toFixed(0)}%`
-                : undefined
-            }
-          />
-          <Tooltip
-            {...TT}
-            formatter={
-              stackTypePct
-                ? (v: unknown) => `${(Number(v) * 100).toFixed(1)}%`
-                : undefined
-            }
-          />
-          {showLeg && (
-            <Legend
-              wrapperStyle={{ fontSize: 11, color: "#9ca3af" }}
-              formatter={(v) => trunc(String(v), 18)}
+
+    // Detect if series field actually exists in data (long format) or if data is wide format
+    const seriesInData = Boolean(sF && data.length > 0 && sF in data[0]);
+
+    if (sF && seriesInData) {
+      // Long format: pivot by series field
+      const { rows, keys } = pivotSeries(sortedData, isH ? yF : xF, isH ? xF : yF, sF);
+      return (
+        <ResponsiveContainer width="100%" height={320}>
+          <BarChart
+            data={rows}
+            margin={margin}
+            layout={isH ? "vertical" : "horizontal"}
+            stackOffset={stackTypePct ? "expand" : undefined}
+          >
+            {showGrid && <CartesianGrid {...GRID} />}
+            <XAxis {...xAxisProps} />
+            <YAxis
+              {...yAxisProps}
+              tickFormatter={!isH && stackTypePct ? (v) => `${(v * 100).toFixed(0)}%` : undefined}
             />
-          )}
-          {keys.map((sv, i) => (
-            <Bar
-              key={sv}
-              dataKey={sv}
-              stackId={stackId}
-              fill={P[i % P.length]}
-              radius={stackId ? undefined : [2, 2, 0, 0]}
-              isAnimationActive
-              animationDuration={600 + i * 100}
-            >
-              {showLabels && (
-                <LabelList
-                  dataKey={sv}
-                  position={isH ? "right" : "top"}
-                  style={{ fontSize: 10, fill: "#9ca3af" }}
-                  formatter={(v: unknown) => trunc(String(v ?? ""), 8)}
-                />
-              )}
-            </Bar>
-          ))}
-        </BarChart>
-      </ResponsiveContainer>
-    );
+            <Tooltip
+              {...TT}
+              formatter={stackTypePct ? (v: unknown) => `${(Number(v) * 100).toFixed(1)}%` : undefined}
+            />
+            {showLeg && (
+              <Legend wrapperStyle={{ fontSize: 11, color: "#9ca3af" }} formatter={(v) => trunc(String(v), 18)} />
+            )}
+            {keys.map((sv, i) => (
+              <Bar key={sv} dataKey={sv} stackId={stackId} fill={P[i % P.length]}
+                radius={stackId ? undefined : [2, 2, 0, 0]} isAnimationActive animationDuration={600 + i * 100}>
+                {showLabels && (
+                  <LabelList dataKey={sv} position={isH ? "right" : "top"}
+                    style={{ fontSize: 10, fill: "#9ca3af" }}
+                    formatter={(v: unknown) => trunc(String(v ?? ""), 8)} />
+                )}
+              </Bar>
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+      );
+    } else {
+      // Wide format: each numeric column except the category column is its own series
+      const catKey = xF; // x encoding always holds the category field
+      const wideKeys = data.length > 0
+        ? Object.keys(data[0]).filter((k) => k !== catKey && typeof data[0][k] === "number")
+        : yF ? [yF] : [];
+
+      // For horizontal wide: Y axis shows categories (xF), X axis shows values
+      const wideYAxisProps = isH
+        ? { dataKey: catKey, type: "category" as const, tick: <YTick />, axisLine: AX.axisLine, tickLine: AX.tickLine, width: 140 }
+        : { tick: <NumTick />, axisLine: AX.axisLine, tickLine: AX.tickLine };
+      const wideXAxisProps = isH
+        ? { type: "number" as const, tick: <NumTick />, axisLine: AX.axisLine, tickLine: AX.tickLine }
+        : { dataKey: catKey, tick: <XTick />, axisLine: AX.axisLine, tickLine: AX.tickLine, height: 68, interval: 0 as const };
+
+      const wideSorted = wideKeys.length > 0
+        ? sortRows(data, wideKeys[0], ccfg.sort_order || "none")
+        : data;
+
+      const dynHeight = isH ? Math.max(320, wideSorted.length * 36 + 60) : 320;
+
+      return (
+        <ResponsiveContainer width="100%" height={dynHeight}>
+          <BarChart
+            data={wideSorted}
+            margin={margin}
+            layout={isH ? "vertical" : "horizontal"}
+            stackOffset={stackTypePct ? "expand" : undefined}
+          >
+            {showGrid && <CartesianGrid {...GRID} />}
+            <XAxis {...wideXAxisProps} />
+            <YAxis
+              {...wideYAxisProps}
+              tickFormatter={!isH && stackTypePct ? (v) => `${(v * 100).toFixed(0)}%` : undefined}
+            />
+            <Tooltip
+              {...TT}
+              formatter={stackTypePct ? (v: unknown) => `${(Number(v) * 100).toFixed(1)}%` : undefined}
+            />
+            {showLeg && (
+              <Legend wrapperStyle={{ fontSize: 11, color: "#9ca3af" }} formatter={(v) => trunc(String(v), 18)} />
+            )}
+            {wideKeys.map((k, i) => (
+              <Bar key={k} dataKey={k} stackId={stackId} fill={P[i % P.length]}
+                radius={stackId ? undefined : isH ? [0, 3, 3, 0] : [2, 2, 0, 0]}
+                isAnimationActive animationDuration={600 + i * 100}>
+                {showLabels && (
+                  <LabelList dataKey={k} position={isH ? "right" : "top"}
+                    style={{ fontSize: 10, fill: "#9ca3af" }}
+                    formatter={(v: unknown) => trunc(String(v ?? ""), 8)} />
+                )}
+              </Bar>
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+      );
+    }
   }
 
   // --- Area ---
   if (ct === "area") {
     const areaLines = sF
       ? (() => {
-          const { rows, keys } = pivotSeries(sortedData, xF, yF, sF);
+          const { rows, keys } = pivotSeries(sortedData, isH ? yF : xF, isH ? xF : yF, sF);
           return { rows, keys };
         })()
       : null;
@@ -1134,7 +1178,7 @@ const FullChart: React.FC<{ a: Artifact }> = ({ a }) => {
   if (ct === "line" || ct === "box_plot") {
     const lines = sF
       ? (() => {
-          const { rows, keys } = pivotSeries(sortedData, xF, yF, sF);
+          const { rows, keys } = pivotSeries(sortedData, isH ? yF : xF, isH ? xF : yF, sF);
           return { rows, keys };
         })()
       : null;
@@ -1195,6 +1239,8 @@ const FullChart: React.FC<{ a: Artifact }> = ({ a }) => {
   }
 
   // --- Default: Bar / Grouped bar / Histogram ---
+  const barDataKey = isH ? xF : yF;
+  const seriesKeys = sF ? [...new Set(data.map((r) => String(r[sF] ?? "")))] : [];
   return (
     <ResponsiveContainer width="100%" height={320}>
       <BarChart
@@ -1206,19 +1252,36 @@ const FullChart: React.FC<{ a: Artifact }> = ({ a }) => {
         <XAxis {...xAxisProps} />
         <YAxis {...yAxisProps} />
         <Tooltip {...TT} />
-        {showLeg && (
+        {showLeg && sF ? (
+          <Legend
+            payload={seriesKeys.map((k, i) => ({
+              value: k,
+              type: "rect" as const,
+              color: P[i % P.length],
+            }))}
+            wrapperStyle={{ fontSize: 11, color: "#9ca3af" }}
+            formatter={(v) => trunc(String(v), 18)}
+          />
+        ) : showLeg ? (
           <Legend wrapperStyle={{ fontSize: 11, color: "#9ca3af" }} />
-        )}
+        ) : null}
         <Bar
-          dataKey={yF}
+          dataKey={barDataKey}
           fill={P[0]}
           radius={isH ? [0, 3, 3, 0] : [3, 3, 0, 0]}
           isAnimationActive
           animationDuration={700}
         >
+          {sF
+            ? sortedData.map((row, i) => {
+                const sv = String(row[sF] ?? "");
+                const idx = seriesKeys.indexOf(sv);
+                return <Cell key={i} fill={P[idx < 0 ? 0 : idx % P.length]} />;
+              })
+            : null}
           {showLabels && (
             <LabelList
-              dataKey={yF}
+              dataKey={barDataKey}
               position={isH ? "right" : "top"}
               style={{ fontSize: 10, fill: "#9ca3af" }}
               formatter={(v: unknown) => trunc(String(v ?? ""), 10)}

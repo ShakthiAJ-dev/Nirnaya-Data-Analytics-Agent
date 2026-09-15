@@ -348,13 +348,20 @@ def create_worker_tools(
     worker_id: str,
     supabase_service: Any,
     redis_service: Any,
+    artifact_type: str = "table",
+    has_business_rules: bool = True,
 ) -> list:
     """
     Factory: returns the list of tools available to a specific worker instance.
     Closes over schema_name, metadata, turn_id, worker_id, and services.
+
+    `artifact_type` controls which finalize tool is included (only one, to avoid
+    model confusion between finalize_kpi / finalize_chart / finalize_table).
+    `has_business_rules` controls whether fetch_business_rule is included.
     """
     tables: dict = full_metadata.get("tables", {})
     business_rules: list[dict] = full_metadata.get("business_rules", [])
+
 
     # ------------------------------------------------------------------
     # Tool: get_table_details (same as orchestrator — workers may need it)
@@ -644,12 +651,24 @@ def create_worker_tools(
             "table_config":   _to_plain_dict(table_config) if table_config else {},
         }
 
-    return [
+    # Build tool list: only include the finalize tool matching artifact_type,
+    # and conditionally include fetch_business_rule.
+    atype = artifact_type.lower()
+    finalize_tool_map = {
+        "kpi":   finalize_kpi,
+        "chart": finalize_chart,
+        "table": finalize_table,
+    }
+    the_finalize_tool = finalize_tool_map.get(atype, finalize_table)
+
+    tool_list = [
         get_table_details,
         get_column_unique_values,
-        fetch_business_rule,
         run_sql,
-        finalize_kpi,
-        finalize_chart,
-        finalize_table,
+        the_finalize_tool,
     ]
+    if has_business_rules:
+        # Insert fetch_business_rule before run_sql (index 2)
+        tool_list.insert(2, fetch_business_rule)
+
+    return tool_list

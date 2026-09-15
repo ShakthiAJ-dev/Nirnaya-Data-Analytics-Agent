@@ -736,7 +736,86 @@ select:focus-visible {
   border-radius: 4px 16px 16px 16px;
   color: #e2e8f0;
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.65;
+}
+
+/* Richer markdown inside assistant bubble */
+.assistant-bubble .markdown-content {
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.assistant-bubble .markdown-content .md-h1 {
+  font-size: 21px;
+  font-weight: 700;
+  color: #f8fafc;
+  margin: 18px 0 8px;
+  letter-spacing: -0.02em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 6px;
+}
+
+.assistant-bubble .markdown-content .md-h2 {
+  font-size: 17px;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin: 16px 0 7px;
+  border-bottom: none;
+  border-left: 3px solid #6366f1;
+  padding: 1px 0 1px 10px;
+}
+
+.assistant-bubble .markdown-content .md-h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: #cbd5e1;
+  margin: 13px 0 5px;
+}
+
+.assistant-bubble .markdown-content .md-p {
+  margin: 0 0 12px;
+  color: #e2e8f0;
+}
+
+.assistant-bubble .markdown-content .md-ul,
+.assistant-bubble .markdown-content .md-ol {
+  margin: 6px 0 12px 20px;
+  gap: 4px;
+}
+
+.assistant-bubble .markdown-content .md-ul li,
+.assistant-bubble .markdown-content .md-ol li {
+  color: #d1d5db;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.assistant-bubble .markdown-content strong {
+  color: #f1f5f9;
+  font-weight: 600;
+}
+
+.assistant-bubble .markdown-content em {
+  color: #94a3b8;
+  font-style: italic;
+}
+
+.assistant-bubble .markdown-content .md-blockquote {
+  border-left: 3px solid rgba(99, 102, 241, 0.5);
+  padding: 6px 14px;
+  margin: 10px 0;
+  background: rgba(99, 102, 241, 0.07);
+  border-radius: 0 6px 6px 0;
+  color: #94a3b8;
+}
+
+.assistant-bubble .markdown-content .md-inline-code {
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  color: #c4b5fd;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 13px;
 }
 
 .assistant-meta-left {
@@ -1941,17 +2020,20 @@ select:focus-visible {
 .turn-meta-row {
   padding: 2px 24px 4px;
   animation: stepAppear 0.22s ease both;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .turn-meta-live {
-  display: inline-flex;
-  align-items: center;
+  display: flex;
+  align-items: flex-start;
   gap: 8px;
-  padding: 5px 11px;
-  background: rgba(99, 102, 241, 0.08);
+  padding: 10px 12px;
+  background: rgba(99, 102, 241, 0.06);
   border: 1px solid rgba(99, 102, 241, 0.18);
-  border-radius: 20px;
+  border-radius: 10px;
   font-size: 12px;
+  min-width: 0;
   color: var(--text-secondary);
 }
 
@@ -1967,7 +2049,8 @@ select:focus-visible {
 }
 
 .turn-meta-step-label {
-  max-width: 280px;
+  flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2017,6 +2100,8 @@ select:focus-visible {
   flex-direction: column;
   gap: 2px;
   animation: stepAppear 0.18s ease both;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .turn-meta-step-item {
@@ -2028,6 +2113,8 @@ select:focus-visible {
   font-size: 12px;
   color: var(--text-secondary);
   transition: background 0.12s;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .turn-meta-step-item:hover {
@@ -2035,14 +2122,47 @@ select:focus-visible {
 }
 
 .turn-meta-step-reasoning {
-  padding: 6px 10px 6px 28px;
-  font-size: 11.5px;
-  color: var(--text-muted);
-  line-height: 1.5;
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 5px;
-  margin: 2px 0 4px;
+  padding: 8px 12px 8px 12px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.65;
+  background: rgba(0, 0, 0, 0.25);
+  border-left: 2px solid rgba(99, 102, 241, 0.45);
+  border-radius: 0 6px 6px 0;
+  margin: 4px 0 6px 4px;
   animation: stepAppear 0.15s ease both;
+}
+
+.turn-meta-step-reasoning .markdown-content {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+.turn-meta-step-reasoning .markdown-content .md-p {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+}
+
+.turn-meta-step-reasoning .markdown-content .md-p:last-child {
+  margin-bottom: 0;
+}
+
+.turn-meta-step-reasoning .markdown-content .md-ul,
+.turn-meta-step-reasoning .markdown-content .md-ol {
+  margin: 4px 0 6px 14px;
+}
+
+.turn-meta-step-reasoning .markdown-content .md-h1,
+.turn-meta-step-reasoning .markdown-content .md-h2,
+.turn-meta-step-reasoning .markdown-content .md-h3 {
+  font-size: 13px;
+  margin: 6px 0 4px;
+}
+
+.turn-meta-step-reasoning .markdown-content .md-pre {
+  font-size: 11.5px;
+  padding: 8px 10px;
 }
 
 /* ==========================================================================

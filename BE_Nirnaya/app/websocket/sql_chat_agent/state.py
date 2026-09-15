@@ -63,6 +63,16 @@ class OrchestratorState(TypedDict):
     pending_question: dict | None    # set when ask_user is triggered
     dispatch_plan: list[dict] | None # artifact specs sent to workers
 
+    # ── Clarification tracking ────────────────────────────────────────────
+    # Persists across turns (LangGraph checkpoint) — NOT reset per turn.
+    # Enforces the global max-5 ask_user limit per chat session.
+    ask_user_count: int
+
+    # Key-findings paragraph emitted by the discovery LLM via signal_ready_to_decide.
+    # Forwarded to decide_node and synthesize_final_node for richer context.
+    # Reset to "" at the start of each turn by skim_tables_node.
+    discovery_key_findings: str
+
     # ── Artifact collection ───────────────────────────────────────────────
     # operator.add reducer: each parallel worker safely appends its result
     artifact_results: Annotated[list[dict], operator.add]

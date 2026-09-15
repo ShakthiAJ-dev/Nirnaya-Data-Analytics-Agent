@@ -36,13 +36,18 @@ def create_orchestrator_tools(
     schema_name: str,
     full_metadata: dict,
     supabase_service: Any,          # SupabaseService — not typed to avoid circular import
+    has_business_rules: bool = True,
+    ask_user_count: int = 0,
 ) -> list:
     """
     Factory: returns a list of bound LangChain tools for the orchestrator.
     Call once per turn, passing the current state's schema_name + full_metadata.
+    `has_business_rules` controls whether fetch_business_rule is included (saves
+    tokens and avoids model confusion when no rules are defined).
     """
     tables: dict = full_metadata.get("tables", {})
     business_rules: list[dict] = full_metadata.get("business_rules", [])
+
 
     # ------------------------------------------------------------------
     # Tool: get_table_details
@@ -240,10 +245,52 @@ def create_orchestrator_tools(
         """
         return {"status": "ready", "reason": reason}
 
-    return [
+
+    # ------------------------------------------------------------------
+    # Tool: ask_user_during_discovery
+    # ------------------------------------------------------------------
+
+    @tool
+    async def ask_user_during_discovery(
+        question: str,
+        mode: str = "free_text",
+        options: list = None,
+    ) -> dict:
+        """
+        Pause discovery and ask the user a clarifying question about their analytical
+        intent or methodology. Use this BEFORE calling any other discovery tools when:
+        - The question is ambiguous about WHICH dimension/metric to focus on
+        - Multiple valid analytical approaches exist and the user's preference matters
+        - The approach (region vs product, MoM vs YoY) is genuinely unclear
+
+        Do NOT use this for technical questions you can resolve via get_table_details
+        or run_discovery_queries. Only ask when the user's INTENT is unclear.
+
+        Args:
+            question: The clarifying question to ask the user. Be specific and offer
+                      concrete options where possible.
+            mode: "mcq" for multiple choice, "free_text" for open answer (default)
+            options: List of option strings if mode="mcq", else null/empty
+        Returns:
+            {"status": "ask_user_triggered"}
+        """
+        return {
+            "status": "ask_user_triggered",
+            "question": question,
+            "mode": mode,
+            "options": options or [],
+        }
+
+    # Build return list — fetch_business_rule only included when rules exist
+    tool_list = [
         get_table_details,
         get_column_unique_values,
         run_discovery_queries,
-        fetch_business_rule,
         signal_ready_to_decide,
+        ask_user_during_discovery,
     ]
+    if has_business_rules:
+        # Insert fetch_business_rule after run_discovery_queries (index 3)
+        tool_list.insert(3, fetch_business_rule)
+
+    return tool_list

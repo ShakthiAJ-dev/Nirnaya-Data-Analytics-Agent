@@ -55,6 +55,7 @@ function App() {
   const [selectedArtifact, setSelectedArtifact] = useState<Artifact | null>(null);
 
   const [uploadTargetDbId, setUploadTargetDbId] = useState<string | null>(null);
+  const [uploadingDbId, setUploadingDbId] = useState<string | null>(null);
   const sidebarUploadRef = useRef<HTMLInputElement | null>(null);
   const streamingRef = useRef<Record<string, { projectId: string; placeholderId: string }>>({});
   const currentTurnContextRef = useRef<{ projectId: string; placeholderId: string } | null>(null);
@@ -529,7 +530,7 @@ function App() {
       activeTurnContextsRef.current[turnId] = { projectId: targetProjId, placeholderId: turnId };
     }
     wsClient.sendAskUserResponse(turnId, answer, modelId);
-    // Mark the askUser as answered so the UI displays the selected state smoothly
+    // Keep existing steps so they stay visible while execution continues
     setProjects((prev) =>
       prev.map((p) => ({
         ...p,
@@ -542,10 +543,21 @@ function App() {
     );
   }, [wsClient, currentProjectId]);
 
+  /** Cancel/pause the in-flight generation. */
+  const handleStopGeneration = useCallback(() => {
+    if (!wsClient?.isReady) return;
+    wsClient.cancelTransaction();
+    // Optimistically mark current project as not loading
+    if (currentProjectId) {
+      setRunningProjectIds((prev) => ({ ...prev, [currentProjectId]: false }));
+    }
+  }, [wsClient, currentProjectId]);
+
   /** Logo click — go back to home (no project selected) */
   const handleGoHome = () => {
     setCurrentProjectId(null);
   };
+
 
   const handleSelectProject = (projectId: string) => {
     setCurrentProjectId(projectId);
@@ -687,6 +699,7 @@ function App() {
   const handleSidebarFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !uploadTargetDbId) return;
+    setUploadingDbId(uploadTargetDbId);
     try {
       await databaseService.uploadFile(uploadTargetDbId, file);
       await handleDatabaseCreated();
@@ -695,6 +708,7 @@ function App() {
     } finally {
       if (sidebarUploadRef.current) sidebarUploadRef.current.value = '';
       setUploadTargetDbId(null);
+      setUploadingDbId(null);
     }
   };
 
@@ -837,6 +851,13 @@ function App() {
   const isCurrentProjectLoading = Boolean(currentProjectId && runningProjectIds[currentProjectId]);
   const activeMessages = currentProject?.messages ?? [];
 
+  // Derive the active unanswered ask_user event from the current project messages
+  const activeAskUser = activeMessages
+    .slice()
+    .reverse()
+    .find((m) => m.askUser && !m.askUser.answeredAnswer)
+    ?.askUser ?? null;
+
   const pendingDatabaseName =
     databases.find((d) => d.id === pendingDatabaseId)?.name ??
     (pendingDatabaseId ? 'Loading…' : 'Select a Database');
@@ -870,6 +891,7 @@ function App() {
         onNewDatabase={() => setIsNewDatabaseModalOpen(true)}
         onDeleteDatabase={handleDeleteDatabase}
         onUploadToDatabase={handleUploadToDatabase}
+        uploadingDbId={uploadingDbId ?? undefined}
         onOpenCredentials={() => setIsCredentialsModalOpen(true)}
         onAddDemo={handleOpenDemoModal}
         onTableDeleted={handleDatabaseCreated}
@@ -892,6 +914,7 @@ function App() {
           onOpenCredentials={() => setIsCredentialsModalOpen(true)}
           onAskUserResponse={handleAskUserResponse}
           onDeleteMessage={handleDeleteMessage}
+          activeAskUser={activeAskUser}
           renderInput={
             <ChatInput
               onSendMessage={handleSendMessage}
@@ -903,6 +926,9 @@ function App() {
               onOpenCredentials={() => setIsCredentialsModalOpen(true)}
               noDatabaseSelected={pendingDatabaseId === null}
               onAddDemo={handleOpenDemoModal}
+              onStopGeneration={handleStopGeneration}
+              activeAskUser={activeAskUser}
+              onAskUserResponse={handleAskUserResponse}
             />
           }
         />
