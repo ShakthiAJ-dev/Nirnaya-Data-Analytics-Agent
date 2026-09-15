@@ -8,6 +8,12 @@ GET /api/v1/health
   → LLM health is intentionally excluded — LLM is a per-request factory
     keyed on caller-supplied API keys, so there is nothing server-side to ping.
   → Returns aggregate status: healthy | degraded | unhealthy
+
+POST /api/v1/ping
+  → Lightweight keep-alive endpoint for Upstash QStash scheduled pings.
+  → QStash only sends POST requests, so this exists solely to prevent
+    the Render free-tier instance from spinning down.
+  → No auth required; returns a minimal JSON body immediately.
 """
 
 from __future__ import annotations
@@ -87,3 +93,17 @@ async def health_check(
         environment=settings.environment,
         services=services,
     )
+
+
+@router.post(
+    "/ping",
+    summary="Keep-alive ping (QStash)",
+    description=(
+        "Lightweight POST endpoint for Upstash QStash scheduled pings. "
+        "QStash only sends POST requests; this wakes the Render instance "
+        "without running a full health check. No authentication required."
+    ),
+    include_in_schema=True,
+)
+async def ping() -> dict[str, str]:
+    return {"status": "ok", "message": "pong"}
