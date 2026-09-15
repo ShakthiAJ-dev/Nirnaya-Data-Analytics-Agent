@@ -125,7 +125,7 @@ class LLMService:
         client = boto3.client(service_name="bedrock-runtime", **aws_kwargs)
 
         bedrock_api_key = settings.bedrock_api_key
-
+        logger.info("bedrock_boto3_client_created", region=settings.bedrock_region, bedrock_api_key=bedrock_api_key)
         def _inject_bearer_token(request: Any, **kwargs: Any) -> None:
             request.headers["Authorization"] = f"Bearer {bedrock_api_key}"
 
