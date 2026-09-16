@@ -909,7 +909,7 @@ function App() {
         />
       )}
 
-      <div style={{ flex: 1, display: 'flex', minWidth: 0, overflow: 'hidden' }}>
+      <div style={{ flex: 1, display: 'flex', minWidth: 0, overflow: 'hidden', height: '100%', minHeight: 0 }}>
         <ChatArea
           currentProject={chatAreaProject as any}
           currentProjectId={currentProjectId}
