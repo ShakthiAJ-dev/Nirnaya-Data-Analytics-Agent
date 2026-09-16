@@ -117,7 +117,8 @@ select:focus-visible {
 /* Layout Container (Clean matte dark background, no shiny radial glow) */
 .nirnaya-app {
   display: flex;
-  height: 100vh;
+  height: 100vh;       /* fallback for older browsers */
+  height: 100dvh;      /* dynamic viewport: accounts for iOS Safari browser chrome */
   width: 100vw;
   background-color: var(--bg-app);
   overflow: hidden;
@@ -457,6 +458,7 @@ select:focus-visible {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  overflow: hidden;    /* contain children so header is never pushed off-screen */
   position: relative;
   z-index: 1;
   background: transparent;
@@ -473,6 +475,7 @@ select:focus-visible {
   background: rgba(11, 15, 23, 0.85);
   backdrop-filter: blur(8px);
   z-index: 5;
+  flex-shrink: 0; /* prevent flex from squeezing the header out of view */
 }
 
 .chat-header-title-box {
@@ -1626,8 +1629,30 @@ select:focus-visible {
 /* ── Mobile: ≤ 768px ── */
 @media (max-width: 768px) {
   /* Root layout — sidebar becomes fixed overlay, content fills full width */
-  .nirnaya-app {
+
+  /* iOS Safari fix: -webkit-fill-available correctly excludes browser chrome
+     so the app never overflows the visible viewport */
+  html, body, #root {
+    height: 100vh;
+    height: -webkit-fill-available;
+    height: 100dvh;
     overflow: hidden;
+  }
+
+  .nirnaya-app {
+    height: 100vh;
+    height: -webkit-fill-available;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  /* Ensure the chat main area is fully contained */
+  .nirnaya-chat-main {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
   }
 
   /* Sidebar: out of flow, slides in as drawer */
@@ -1700,8 +1725,10 @@ select:focus-visible {
     height: 52px;
     gap: 6px;
     flex-shrink: 0;
-    position: sticky;
-    top: 0;
+    /* Use relative (not sticky) — sticky breaks when any ancestor has overflow:hidden.
+       The header stays pinned naturally as a flex item at the top of .nirnaya-chat-main;
+       scroll is contained inside .chat-messages-container below. */
+    position: relative;
     z-index: 10;
   }
 
