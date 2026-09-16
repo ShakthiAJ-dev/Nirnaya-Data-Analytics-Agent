@@ -411,10 +411,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 showAskOverlay
                   ? 'Answer the clarification above to continue…'
                   : isLoading
-                  ? 'Generating response... Click Pause to stop (Esc)'
+                  ? 'Generating response… Press Esc to stop'
                   : !isDataLoaded || hasModels
-                  ? 'Ask questions based on your data or project... (Shift+Enter for newline)'
-                  : 'Add an API key in settings to start asking analytics questions...'
+                  ? 'Ask about your data, run queries, or explore insights…'
+                  : 'Add an API key in settings to start asking analytics questions…'
               }
               value={showAskOverlay ? '' : content}
               onChange={(e) => { if (!showAskOverlay) setContent(e.target.value); }}
@@ -605,9 +605,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             )}
           </div>
 
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <div className="chat-input-bottom-hint" style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Sparkles size={12} style={{ color: 'var(--accent-primary)' }} />
-            <span>Nirnaya Data Agent • Multi-turn analytics</span>
+            <span>Multi-turn analytics  •  Shift+Enter for new line</span>
           </div>
         </div>
       </div>

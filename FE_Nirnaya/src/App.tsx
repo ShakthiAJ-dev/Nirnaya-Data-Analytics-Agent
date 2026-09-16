@@ -34,6 +34,7 @@ const STORAGE_KEYS = {
 };
 
 function App() {
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const { sessionStatus, submitKey, wsClient, onWSMessage } = useSession();
   const { models: availableModels, refresh: refreshModels } = useModels(sessionStatus === 'ready');
 
@@ -884,7 +885,9 @@ function App() {
         pendingDatabaseId={pendingDatabaseId ?? undefined}
         isDataLoaded={isDataLoaded}
         isInsideProject={currentProjectId !== null}
-        onSelectProject={handleSelectProject}
+        isMobileOpen={isMobileSidebarOpen}
+        onMobileClose={() => setIsMobileSidebarOpen(false)}
+        onSelectProject={(id) => { handleSelectProject(id); setIsMobileSidebarOpen(false); }}
         onSelectDatabase={handleSelectDatabase}
         onNewChat={() => setIsNewProjectModalOpen(true)}
         onDeleteProject={handleDeleteProject}
@@ -895,8 +898,16 @@ function App() {
         onOpenCredentials={() => setIsCredentialsModalOpen(true)}
         onAddDemo={handleOpenDemoModal}
         onTableDeleted={handleDatabaseCreated}
-        onGoHome={handleGoHome}
+        onGoHome={() => { handleGoHome(); setIsMobileSidebarOpen(false); }}
       />
+
+      {/* Mobile sidebar overlay backdrop */}
+      {isMobileSidebarOpen && (
+        <div
+          className="mobile-sidebar-backdrop"
+          onClick={() => setIsMobileSidebarOpen(false)}
+        />
+      )}
 
       <div style={{ flex: 1, display: 'flex', minWidth: 0, overflow: 'hidden' }}>
         <ChatArea
@@ -915,6 +926,7 @@ function App() {
           onAskUserResponse={handleAskUserResponse}
           onDeleteMessage={handleDeleteMessage}
           activeAskUser={activeAskUser}
+          onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
           renderInput={
             <ChatInput
               onSendMessage={handleSendMessage}
