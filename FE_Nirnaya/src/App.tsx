@@ -195,7 +195,8 @@ function App() {
 
         if (context) {
           const { projectId, placeholderId } = context;
-          setRunningProjectIds((prev) => ({ ...prev, [projectId]: false }));
+          // Keep runningProjectIds true — agent is still active, just waiting for user input.
+          // Stop button must remain visible so user can cancel at any point.
           setProjects((prev) =>
             prev.map((p) =>
               p.id === projectId
@@ -548,9 +549,23 @@ function App() {
   const handleStopGeneration = useCallback(() => {
     if (!wsClient?.isReady) return;
     wsClient.cancelTransaction();
-    // Optimistically mark current project as not loading
     if (currentProjectId) {
       setRunningProjectIds((prev) => ({ ...prev, [currentProjectId]: false }));
+      // Clear any pending unanswered ask_user so the overlay dismisses immediately
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === currentProjectId
+            ? {
+                ...p,
+                messages: (p.messages || []).map((m) =>
+                  m.askUser && !m.askUser.answeredAnswer
+                    ? { ...m, askUser: undefined }
+                    : m
+                ),
+              }
+            : p
+        )
+      );
     }
   }, [wsClient, currentProjectId]);
 

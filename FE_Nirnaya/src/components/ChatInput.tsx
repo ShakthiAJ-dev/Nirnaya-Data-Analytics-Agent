@@ -288,7 +288,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     activeAskUser.turn_id !== submittedAskTurnId;
 
   const handleAskUserResponse = (turnId: string, answer: string, mid: string) => {
-    setSubmittedAskTurnId(turnId); // immediately dismiss overlay
+    setSubmittedAskTurnId(turnId);
     onAskUserResponse?.(turnId, answer, mid);
   };
 
@@ -426,29 +426,36 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             />
           </div>
 
-          {/* Send or Stop Button */}
-          <button
-            type="button"
-            className={`btn-send-message ${isLoading && !showAskOverlay ? 'btn-stop-generating' : ''}`}
-            onClick={isLoading && !showAskOverlay ? onStopGeneration : handleSend}
-            disabled={showAskOverlay || (!isLoading && !content.trim())}
-            title={
-              showAskOverlay
-                ? 'Answer the clarification above'
-                : isLoading
-                ? 'Pause / Stop generation (Esc)'
-                : !hasModels
-                ? 'Add an API key to send queries'
-                : 'Send query (Enter)'
-            }
-            id="btn-send-chat"
-          >
-            {isLoading && !showAskOverlay ? (
-              <Square size={13} strokeWidth={2.2} fill="currentColor" />
-            ) : (
+          {/* Stop button — always shown when agent is active (including during ask_user) */}
+          {isLoading ? (
+            <button
+              type="button"
+              className="btn-stop-generating"
+              onClick={onStopGeneration}
+              title="Stop generation (Esc)"
+              id="btn-send-chat"
+            >
+              <Square size={11} strokeWidth={2.5} fill="currentColor" />
+              <span className="btn-stop-label">Stop</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn-send-message"
+              onClick={handleSend}
+              disabled={showAskOverlay || !content.trim()}
+              title={
+                showAskOverlay
+                  ? 'Answer the clarification above'
+                  : !hasModels
+                  ? 'Add an API key to send queries'
+                  : 'Send query (Enter)'
+              }
+              id="btn-send-chat"
+            >
               <Send size={16} strokeWidth={2.2} />
-            )}
-          </button>
+            </button>
+          )}
         </div>
 
         {/* Bottom Bar: Model Selector Dropdown & Capabilities hint */}
