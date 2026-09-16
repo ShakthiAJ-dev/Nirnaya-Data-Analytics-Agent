@@ -537,6 +537,7 @@ select:focus-visible {
 .chat-messages-container {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   width: 100%;
 }
 
@@ -1548,28 +1549,590 @@ select:focus-visible {
   }
 }
 
-/* Mobile & Tablet Responsiveness */
-@media (max-width: 768px) {
-  .nirnaya-sidebar {
-    position: absolute;
-    left: -285px;
-    transition: left var(--transition-normal);
+/* ==========================================================================
+   MOBILE & TABLET RESPONSIVENESS — COMPREHENSIVE
+   ========================================================================== */
+
+/* ── Hamburger button in chat header (hidden on desktop) ── */
+.chat-header-hamburger {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 5px;
+  width: 36px;
+  height: 36px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--transition-fast);
+}
+
+.chat-header-hamburger:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.hamburger-line {
+  display: block;
+  width: 17px;
+  height: 2px;
+  background: var(--text-secondary);
+  border-radius: 2px;
+  transition: background var(--transition-fast);
+}
+
+/* ── Mobile sidebar close button (hidden on desktop) ── */
+.sidebar-mobile-close-btn {
+  display: none !important;
+}
+
+/* ── Mobile sidebar backdrop overlay ── */
+.mobile-sidebar-backdrop {
+  display: none;
+}
+
+/* ── Tablet: 768–1024px ── */
+@media (max-width: 1024px) {
+  .chat-messages-inner {
+    max-width: 100%;
+    padding: 18px 16px 18px;
   }
 
-  .nirnaya-sidebar.open {
+  .chat-input-container {
+    max-width: 100%;
+  }
+
+  .empty-state-wrap {
+    padding: 24px 16px;
+  }
+
+  .starter-prompts-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .message-bubble-assistant-wrap {
+    max-width: 95%;
+  }
+
+  .message-bubble-user-wrap {
+    max-width: 85%;
+  }
+}
+
+/* ── Mobile: ≤ 768px ── */
+@media (max-width: 768px) {
+  /* Root layout — sidebar becomes fixed overlay, content fills full width */
+  .nirnaya-app {
+    overflow: hidden;
+  }
+
+  /* Sidebar: out of flow, slides in as drawer */
+  .nirnaya-sidebar {
+    /* position: fixed is now effective since inline position:relative was removed */
+    position: fixed !important;
+    top: 0;
     left: 0;
+    height: 100%;
+    /* Override any JS-set inline widths on mobile */
+    width: 285px !important;
+    min-width: 285px !important;
+    max-width: 285px !important;
+    transform: translateX(-100%);
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    z-index: 300;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.6);
+    /* Ensure it doesn’t affect the flex layout below */
+    flex-shrink: 0;
+  }
+
+  .nirnaya-sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  /* Hide the desktop collapse/expand toggle on mobile */
+  .sidebar-collapse-toggle-btn {
+    display: none !important;
+  }
+
+  /* Mobile sidebar backdrop */
+  .mobile-sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(3px);
+    z-index: 299;
+    animation: fadeIn 0.2s ease;
+  }
+
+  /* The main content wrapper (flex:1 sibling of sidebar)
+     must fill all available width since sidebar is fixed (out of flow) */
+  .nirnaya-app > div[style] {
+    flex: 1;
+    width: 100%;
+    min-width: 0;
+    max-width: 100vw;
+  }
+
+  /* Show hamburger, hide desktop model pill */
+  .chat-header-hamburger {
+    display: flex;
+    margin-right: 4px;
+    flex-shrink: 0;
+  }
+
+  /* Show mobile close button inside sidebar */
+  .sidebar-mobile-close-btn {
+    display: flex !important;
+    font-size: 16px;
+    line-height: 1;
+  }
+
+  /* ── Chat Header ── */
+  .chat-header {
+    padding: 0 12px;
+    height: 52px;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .chat-header-title-box {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .chat-header-project {
+    font-size: 12.5px;
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  .chat-header-project span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 140px;
+  }
+
+  .chat-header-session {
+    display: none;
+  }
+
+  .header-slash {
+    display: none;
+  }
+
+  .chat-header-actions {
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .model-pill-badge {
+    display: none;
+  }
+
+  /* ── Chat Body Row ── */
+  .chat-body-row {
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Messages Area ── */
+  .chat-messages-container {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .chat-messages-inner {
+    padding: 12px 10px 12px;
+    gap: 12px;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
+  }
+
+  /* ── Chat Input ── */
+  .chat-input-wrapper {
+    padding: 6px 10px 14px;
+    flex-shrink: 0;
+  }
+
+  .chat-input-container {
+    max-width: 100%;
+    width: 100%;
+    border-radius: var(--radius-md);
+  }
+
+  .input-main-row {
+    padding: 6px 10px;
+    gap: 6px;
+  }
+
+  .chat-textarea {
+    font-size: 16px; /* prevent iOS zoom */
+    min-height: 34px;
+  }
+
+  .input-bottom-bar {
+    padding: 5px 10px 7px;
+  }
+
+  /* ── Message Bubbles ── */
+  .message-row {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .message-row-user {
+    justify-content: flex-end;
+  }
+
+  .message-bubble-user-wrap {
+    max-width: 86%;
+  }
+
+  .message-bubble-assistant-wrap {
+    max-width: 100%;
+    width: 100%;
+    gap: 8px;
+  }
+
+  .assistant-content-box {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .assistant-avatar {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    flex-shrink: 0;
+  }
+
+  .user-bubble {
+    font-size: 13.5px;
+    padding: 10px 14px;
+    word-break: break-word;
+  }
+
+  .assistant-bubble {
+    font-size: 13.5px;
+    padding: 12px 14px;
+    line-height: 1.6;
+    overflow-x: hidden;
+    word-break: break-word;
+  }
+
+  /* Ensure markdown content wraps correctly */
+  .assistant-bubble .markdown-content {
+    overflow-x: hidden;
+    max-width: 100%;
+  }
+
+  /* Code blocks — horizontal scroll instead of overflow */
+  .assistant-bubble .markdown-content .md-pre,
+  .code-block-content,
+  .md-pre {
+    overflow-x: auto;
+    max-width: 100%;
+    font-size: 11.5px;
+    white-space: pre;
+  }
+
+  /* Tables — horizontal scroll */
+  .md-table-wrap,
+  .data-table-scroll,
+  .table-modal-preview-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+
+  .analytics-table,
+  .md-table {
+    font-size: 11.5px;
+    min-width: max-content;
+  }
+
+  /* ── Starter Prompts (Empty State) ── */
+  .empty-state-wrap {
+    padding: 20px 10px;
+    max-width: 100%;
+    width: 100%;
+  }
+
+  .empty-heading {
+    font-size: 19px;
+  }
+
+  .empty-subtext {
+    font-size: 13px;
+    margin-bottom: 18px;
   }
 
   .starter-prompts-grid {
     grid-template-columns: 1fr;
+    gap: 8px;
+    width: 100%;
   }
 
-  .chat-messages-inner {
-    padding: 16px 12px 16px;
+  .prompt-card-btn {
+    padding: 10px 12px;
+    width: 100%;
+  }
+
+  .prompt-card-header {
+    font-size: 12.5px;
+  }
+
+  /* ── Turn Meta Row ── */
+  .turn-meta-row {
+    padding: 2px 0 4px;
+  }
+
+  .turn-meta-live {
+    padding: 8px 10px;
+    font-size: 11.5px;
+  }
+
+  /* ── Artifact Side Panel — full screen on mobile ── */
+  .artifact-side-panel {
+    position: fixed !important;
+    inset: 0;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    min-width: unset !important;
+    z-index: 250;
+    border-left: none;
+    box-shadow: none;
+  }
+
+  /* ── Artifact Mini Cards — horizontal scroll ── */
+  .artifact-thumbs-row,
+  .artifact-mini-cards-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+
+  .artifact-mini-card {
+    min-width: 175px;
+    width: 175px;
+    flex-shrink: 0;
+  }
+
+  /* ── Model Dropdown ── */
+  .model-dropdown-menu {
+    width: calc(100vw - 20px);
+    left: 0;
+    right: 0;
+    transform: none;
+  }
+
+  /* ── Modals ── */
+  .modal-backdrop {
+    padding: 8px;
+    align-items: flex-end;
+  }
+
+  .modal-card {
+    max-width: 100%;
+    width: 100%;
+    margin: 0;
+    border-radius: 16px 16px 0 0;
+  }
+
+  .modal-content {
+    margin: 8px;
+    border-radius: 12px;
+  }
+
+  .modal-header {
+    padding: 14px 16px;
+  }
+
+  .modal-body {
+    padding: 16px;
+    max-height: 65vh;
+  }
+
+  .modal-footer {
+    padding: 12px 16px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .btn-modal-primary,
+  .btn-modal-cancel {
+    flex: 1;
+    justify-content: center;
+    text-align: center;
+    min-width: 100px;
+  }
+
+  /* ── Follow-up Questions ── */
+  .followup-container {
+    padding: 12px 14px;
+  }
+
+  .followup-card {
+    padding: 8px 12px;
+    font-size: 12.5px;
+  }
+
+  /* ── Ask-User Block ── */
+  .ask-user-block {
+    margin: 10px 0 6px;
+    padding: 12px 14px;
+  }
+
+  .ask-user-options {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ask-user-chip {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .ask-user-input-wrap {
+    flex-direction: column;
+  }
+
+  .ask-user-send-btn {
+    width: 100%;
+  }
+
+  /* ── Claude-style Ask Container ── */
+  .claude-ask-container {
+    padding: 12px 14px;
+  }
+
+  .claude-choices-stack {
+    gap: 6px;
+  }
+
+  .claude-choice-card {
+    padding: 9px 12px;
+  }
+
+  .claude-input-row {
+    flex-direction: column;
+  }
+
+  .claude-submit-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* ── Database Table Modal ── */
+  .table-modal-tabs {
+    flex-wrap: wrap;
+    gap: 3px;
+  }
+
+  .table-modal-tab {
+    padding: 6px 10px;
+    font-size: 11.5px;
+  }
+
+  /* ── Sidebar touch-scroll ── */
+  .sidebar-history-section {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+
+/* ── Small mobile: ≤ 480px ── */
+@media (max-width: 480px) {
+  .empty-heading {
+    font-size: 18px;
+  }
+
+  .empty-logo-glow {
+    width: 52px;
+    height: 52px;
+  }
+
+  .user-bubble {
+    font-size: 13px;
+    padding: 9px 12px;
+  }
+
+  .assistant-bubble {
+    font-size: 13px;
+    padding: 10px 12px;
+  }
+
+  .message-bubble-user-wrap {
+    max-width: 92%;
+  }
+
+  .chat-header-project span {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .btn-new-chat {
+    font-size: 12px;
+    padding: 9px 12px;
+  }
+
+  .modal-content {
+    margin: 4px;
+  }
+
+  .artifact-mini-card {
+    min-width: 160px;
+    width: 160px;
+  }
+
+  .followup-chip {
+    display: none;
+  }
+
+  .followup-card {
+    font-size: 12px;
+    padding: 7px 10px;
+  }
+
+  .claude-choice-card {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  .claude-ask-question {
+    font-size: 13.5px;
+  }
+
+  .turn-meta-live {
+    font-size: 11px;
   }
 
   .chat-input-wrapper {
-    padding: 10px 12px 16px;
+    padding: 6px 8px 12px;
+  }
+
+  .input-bottom-bar {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .model-picker-btn {
+    font-size: 11px;
+    padding: 4px 8px;
   }
 }
 
@@ -2021,7 +2584,10 @@ select:focus-visible {
   padding: 2px 24px 4px;
   animation: stepAppear 0.22s ease both;
   min-width: 0;
+  max-width: 100%;
+  width: 100%;
   overflow: hidden;
+  box-sizing: border-box;
 }
 
 .turn-meta-live {
@@ -2034,6 +2600,8 @@ select:focus-visible {
   border-radius: 10px;
   font-size: 12px;
   min-width: 0;
+  overflow: hidden;
+  max-width: 100%;
   color: var(--text-secondary);
 }
 
@@ -2101,12 +2669,15 @@ select:focus-visible {
   gap: 2px;
   animation: stepAppear 0.18s ease both;
   min-width: 0;
+  max-width: 100%;
+  width: 100%;
   overflow: hidden;
+  box-sizing: border-box;
 }
 
 .turn-meta-step-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   padding: 4px 6px;
   border-radius: 5px;
@@ -2114,7 +2685,10 @@ select:focus-visible {
   color: var(--text-secondary);
   transition: background 0.12s;
   min-width: 0;
+  width: 100%;
+  max-width: 100%;
   overflow: hidden;
+  box-sizing: border-box;
 }
 
 .turn-meta-step-item:hover {
@@ -2131,12 +2705,17 @@ select:focus-visible {
   border-radius: 0 6px 6px 0;
   margin: 4px 0 6px 4px;
   animation: stepAppear 0.15s ease both;
+  overflow: hidden;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .turn-meta-step-reasoning .markdown-content {
   font-size: 12.5px;
   line-height: 1.65;
   color: var(--text-secondary);
+  overflow-x: hidden;
+  max-width: 100%;
 }
 
 .turn-meta-step-reasoning .markdown-content .md-p {
@@ -2163,6 +2742,8 @@ select:focus-visible {
 .turn-meta-step-reasoning .markdown-content .md-pre {
   font-size: 11.5px;
   padding: 8px 10px;
+  overflow-x: auto;
+  max-width: 100%;
 }
 
 /* ==========================================================================
@@ -3937,3 +4518,90 @@ select:focus-visible {
     box-shadow: -8px 0 40px rgba(0, 0, 0, 0.6);
   }
 }
+
+/* ==========================================================================
+   DATABASE TABLES MODAL — MOBILE RESPONSIVE
+   ========================================================================== */
+
+/* Bottom-sheet style on mobile */
+@media (max-width: 640px) {
+  .db-tables-modal-backdrop {
+    padding: 0 !important;
+    align-items: flex-end !important;
+  }
+
+  .db-tables-modal-card {
+    border-radius: 20px 20px 0 0 !important;
+    max-height: 92vh !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .db-tables-modal-body {
+    padding: 14px 14px !important;
+  }
+
+  /* Table list row: icon+name on line 1, badges+actions on line 2 */
+  .db-table-list-row {
+    flex-wrap: wrap !important;
+    row-gap: 6px !important;
+  }
+
+  /* Main wrapper (icon + name) takes full first row */
+  .db-table-list-main {
+    flex: 1 1 100% !important;
+  }
+
+  /* Badges sit on second row, left-aligned */
+  .db-table-list-badges {
+    flex-shrink: 0;
+  }
+
+  /* Actions move to right of second row */
+  .db-table-list-actions {
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+}
+
+/* ==========================================================================
+   CHAT INPUT — MOBILE POLISH
+   ========================================================================== */
+
+/* Both secondary hints are desktop-only — inline display:flex needs !important */
+@media (max-width: 768px) {
+  .chat-input-bottom-hint {
+    display: none !important;
+  }
+
+  .input-footer-hint {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .model-picker-btn {
+    max-width: 55vw;
+    overflow: hidden;
+  }
+}
+
+/* ==========================================================================
+   ASK-USER BLOCK — MOBILE POLISH
+   ========================================================================== */
+
+@media (max-width: 480px) {
+  .ask-user-badge {
+    font-size: 10px;
+    padding: 2px 7px;
+  }
+
+  .ask-user-question {
+    font-size: 13px;
+  }
+
+  .claude-ask-question {
+    font-size: 13px;
+  }
+}
+

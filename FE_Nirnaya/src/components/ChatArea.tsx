@@ -127,31 +127,30 @@ const TurnMetaRow: React.FC<{
           </div>
           {/* All accumulated steps — each expandable for reasoning */}
           {sortedSteps.length > 0 && (
-            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1px', paddingLeft: '18px', borderLeft: '1px solid rgba(255,255,255,0.06)' }}>
+            <div style={{ width: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '1px', paddingLeft: '18px', borderLeft: '1px solid rgba(255,255,255,0.06)' }}>
               {sortedSteps.map((step) => (
                 <React.Fragment key={step.seq}>
                   <div
                     style={{
-                      display: 'flex', alignItems: 'center', gap: '7px',
+                      display: 'flex', alignItems: 'flex-start', gap: '7px', width: '100%',
                       fontSize: '12.5px', color: step.status === 'in_progress' ? 'var(--text-secondary)' : 'var(--text-muted)',
                       cursor: step.reasoning ? 'pointer' : 'default',
                       padding: '3px 4px', borderRadius: '4px',
                       transition: 'background 0.12s',
-                      minWidth: 0, overflow: 'hidden',
+                      minWidth: 0,
                     }}
                     onClick={() => step.reasoning && toggleStep(step.seq)}
                     onMouseEnter={(e) => step.reasoning && ((e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.04)')}
                     onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
                   >
                     {step.status === 'in_progress' ? (
-                      <span className="thinking-spin-icon" style={{ width: '10px', height: '10px', flexShrink: 0 }} />
+                      <span className="thinking-spin-icon" style={{ width: '10px', height: '10px', flexShrink: 0, marginTop: '2px' }} />
                     ) : step.status === 'error' ? (
-                      <AlertCircle size={11} style={{ color: '#ef4444', flexShrink: 0 }} />
+                      <AlertCircle size={11} style={{ color: '#ef4444', flexShrink: 0, marginTop: '2px' }} />
                     ) : (
-                      <CheckCircle size={11} style={{ color: '#10b981', flexShrink: 0 }} />
+                      <CheckCircle size={11} style={{ color: '#10b981', flexShrink: 0, marginTop: '2px' }} />
                     )}
-                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{step.title}</span>
-                    {step.detail && <span style={{ opacity: 0.5, fontSize: '11.5px', flexShrink: 0 }}>{step.detail}</span>}
+                    <span style={{ flex: 1, minWidth: 0, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{step.title}{step.detail && <span style={{ opacity: 0.5, fontSize: '11px', marginLeft: '6px' }}>{step.detail}</span>}</span>
                     {step.reasoning && (
                       <ChevronDown
                         size={10}
@@ -214,15 +213,14 @@ const TurnMetaRow: React.FC<{
               <div
                 className="turn-meta-step-item"
                 onClick={() => step.reasoning && toggleStep(step.seq)}
-                style={{ cursor: step.reasoning ? 'pointer' : 'default' }}
+                style={{ cursor: step.reasoning ? 'pointer' : 'default', alignItems: 'flex-start' }}
               >
                 {step.status === 'error' ? (
-                  <AlertCircle size={11} style={{ color: '#ef4444', flexShrink: 0 }} />
+                  <AlertCircle size={11} style={{ color: '#ef4444', flexShrink: 0, marginTop: '2px' }} />
                 ) : (
-                  <CheckCircle size={11} style={{ color: '#10b981', flexShrink: 0 }} />
+                  <CheckCircle size={11} style={{ color: '#10b981', flexShrink: 0, marginTop: '2px' }} />
                 )}
-                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{step.title}</span>
-                {step.detail && <span style={{ opacity: 0.45, fontSize: '11px', flexShrink: 0 }}>{step.detail}</span>}
+                <span style={{ flex: 1, minWidth: 0, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{step.title}{step.detail && <span style={{ opacity: 0.45, fontSize: '11px', marginLeft: '6px' }}>{step.detail}</span>}</span>
                 {step.reasoning && (
                   <ChevronDown
                     size={9}
@@ -273,6 +271,8 @@ interface ChatAreaProps {
   renderInput?: React.ReactNode;
   /** The active unanswered ask_user (passed to suppress bubble rendering — overlay is in ChatInput) */
   activeAskUser?: AskUserEvent | null;
+  /** Mobile: callback to open the sidebar drawer */
+  onOpenMobileSidebar?: () => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -289,6 +289,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onOpenCredentials,
   onDeleteMessage,
   renderInput,
+  onOpenMobileSidebar,
 }) => {
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
@@ -374,6 +375,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     <div className="nirnaya-chat-main">
       {/* Header */}
       <header className="chat-header">
+        {/* Mobile hamburger button */}
+        <button
+          type="button"
+          className="chat-header-hamburger"
+          onClick={onOpenMobileSidebar}
+          title="Open sidebar"
+          aria-label="Open sidebar"
+        >
+          <span className="hamburger-line" />
+          <span className="hamburger-line" />
+          <span className="hamburger-line" />
+        </button>
         <div className="chat-header-title-box" style={{ position: 'relative' }}>
           {!isInsideProject && onSelectDatabase ? (
             <button

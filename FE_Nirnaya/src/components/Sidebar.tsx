@@ -39,6 +39,10 @@ interface SidebarProps {
   isInsideProject?: boolean;
   /** Navigate back to the home/no-project state */
   onGoHome?: () => void;
+  /** Mobile: whether the sidebar drawer is open */
+  isMobileOpen?: boolean;
+  /** Mobile: callback to close the drawer */
+  onMobileClose?: () => void;
 }
 
 interface ModalState {
@@ -67,6 +71,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onTableDeleted,
   isInsideProject = false,
   onGoHome,
+  isMobileOpen = false,
+  onMobileClose,
 }) => {
   const [dbHovered, setDbHovered] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState | null>(null);
@@ -133,14 +139,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
-      className="nirnaya-sidebar"
+      className={`nirnaya-sidebar${isMobileOpen ? ' mobile-open' : ''}`}
       style={{
         width: collapsed ? '64px' : `${sidebarWidth}px`,
         minWidth: collapsed ? '64px' : `${MIN_WIDTH}px`,
         maxWidth: collapsed ? '64px' : `${MAX_WIDTH}px`,
         overflow: 'hidden',
         transition: isDraggingRef.current ? 'none' : 'width 0.2s ease',
-        position: 'relative',
         flexShrink: 0,
       }}
     >
@@ -158,20 +163,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           {collapsed ? <LogoEmblem size={22} /> : <NirnayaLogo size={32} />}
         </button>
-        {/* Collapse / expand toggle — always visible */}
-        <button
-          type="button"
-          onClick={() => setCollapsed((v) => !v)}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          style={{
-            background: 'rgba(255,255,255,0.05)', border: 'none', cursor: 'pointer',
-            color: 'var(--text-secondary)', padding: '6px',
-            display: 'flex', alignItems: 'center', borderRadius: '7px',
-            flexShrink: 0,
-          }}
-        >
-          {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {/* Mobile close button — only visible on small screens */}
+          {onMobileClose && (
+            <button
+              type="button"
+              onClick={onMobileClose}
+              title="Close sidebar"
+              className="sidebar-mobile-close-btn"
+              style={{
+                background: 'rgba(255,255,255,0.05)', border: 'none', cursor: 'pointer',
+                color: 'var(--text-secondary)', padding: '6px',
+                display: 'flex', alignItems: 'center', borderRadius: '7px',
+                flexShrink: 0,
+              }}
+            >
+              ✕
+            </button>
+          )}
+          {/* Collapse / expand toggle — desktop only (hidden on mobile via CSS) */}
+          <button
+            type="button"
+            className="sidebar-collapse-toggle-btn"
+            onClick={() => setCollapsed((v) => !v)}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            style={{
+              background: 'rgba(255,255,255,0.05)', border: 'none', cursor: 'pointer',
+              color: 'var(--text-secondary)', padding: '6px',
+              display: 'flex', alignItems: 'center', borderRadius: '7px',
+              flexShrink: 0,
+            }}
+          >
+            {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+          </button>
+        </div>
       </div>
 
       {/* Drag-to-resize handle — on the right edge */}
@@ -207,7 +232,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             isUploading={uploadingDbId === db.id}
             onMouseEnter={() => setDbHovered(db.id)}
             onMouseLeave={() => setDbHovered(null)}
-            onSelect={() => !isInsideProject && onSelectDatabase?.(db.id)}
+            onSelect={() => { if (!isInsideProject) { onSelectDatabase?.(db.id); onMobileClose?.(); } }}
             onViewTables={(e) => openModal(e, {
               databaseId: db.id,
               databaseName: db.name,
@@ -258,7 +283,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {hasProjects && (
         <div className="sidebar-action-wrap">
-          <button type="button" className="btn-new-chat" onClick={onNewChat} id="btn-new-chat">
+          <button type="button" className="btn-new-chat" onClick={() => { onNewChat(); onMobileClose?.(); }} id="btn-new-chat">
             <Plus size={16} strokeWidth={2.5} />
             <span>New Chat</span>
             <span className="kbd-shortcut">Ctrl+N</span>
@@ -280,7 +305,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     project={project}
                     db={db}
                     isActive={project.id === currentProjectId}
-                    onSelect={() => onSelectProject(project.id)}
+                    onSelect={() => { onSelectProject(project.id); onMobileClose?.(); }}
                     onDelete={(e) => onDeleteProject(project.id, e)}
                   />
                 );
@@ -301,7 +326,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     project={project}
                     db={db}
                     isActive={project.id === currentProjectId}
-                    onSelect={() => onSelectProject(project.id)}
+                    onSelect={() => { onSelectProject(project.id); onMobileClose?.(); }}
                     onDelete={(e) => onDeleteProject(project.id, e)}
                   />
                 );

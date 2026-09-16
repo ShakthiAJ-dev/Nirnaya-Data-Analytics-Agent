@@ -62,6 +62,109 @@ const FIELD_DEFS: {
   { key: 'pii_columns', label: 'PII Columns', icon: <AlertCircle size={13} />, isArray: true, isColumnRef: true },
 ];
 
+// ── Single-select dropdown for column-ref scalar fields ─────────────────────
+const SingleColumnSelect: React.FC<{
+  selected: string;
+  columns: string[];
+  onChange: (val: string) => void;
+  placeholder?: string;
+}> = ({ selected, columns, onChange, placeholder = 'Select a column…' }) => {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    if (open) document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          width: '100%', textAlign: 'left', background: 'rgba(255,255,255,0.05)',
+          border: '1px solid rgba(99,102,241,0.35)', borderRadius: '8px',
+          padding: '9px 12px',
+          color: selected ? 'var(--text-primary)' : 'var(--text-muted)',
+          fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center',
+          justifyContent: 'space-between', gap: '8px',
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: selected ? 'ui-monospace, monospace' : 'inherit' }}>
+          {selected || placeholder}
+        </span>
+        <ChevronDown size={14} style={{ flexShrink: 0, opacity: 0.6, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+      </button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0,
+          background: '#0d111a', border: '1px solid rgba(99,102,241,0.35)',
+          borderRadius: '8px', zIndex: 200, maxHeight: '200px', overflowY: 'auto',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.55)',
+        }}>
+          {/* None option */}
+          <div
+            onClick={() => { onChange(''); setOpen(false); }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '10px',
+              padding: '8px 12px', cursor: 'pointer', fontSize: '13px',
+              color: !selected ? '#a5b4fc' : 'var(--text-muted)',
+              background: !selected ? 'rgba(99,102,241,0.08)' : 'transparent',
+              transition: 'background 0.1s',
+            }}
+            onMouseEnter={(e) => { if (selected) (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.04)'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = !selected ? 'rgba(99,102,241,0.08)' : 'transparent'; }}
+          >
+            <div style={{
+              width: '16px', height: '16px', borderRadius: '50%', flexShrink: 0,
+              border: `1px solid ${!selected ? '#818cf8' : 'rgba(255,255,255,0.2)'}`,
+              background: !selected ? 'rgba(99,102,241,0.3)' : 'transparent',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              {!selected && <Check size={10} style={{ color: '#a5b4fc' }} />}
+            </div>
+            <span style={{ fontStyle: 'italic', opacity: 0.6 }}>— None —</span>
+          </div>
+          {columns.length === 0 ? (
+            <div style={{ padding: '10px 12px', fontSize: '12px', color: 'var(--text-muted)' }}>No columns found</div>
+          ) : columns.map((col) => {
+            const checked = selected === col;
+            return (
+              <div
+                key={col}
+                onClick={() => { onChange(col); setOpen(false); }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '10px',
+                  padding: '8px 12px', cursor: 'pointer', fontSize: '13px',
+                  color: checked ? '#a5b4fc' : 'var(--text-secondary)',
+                  background: checked ? 'rgba(99,102,241,0.08)' : 'transparent',
+                  transition: 'background 0.1s',
+                }}
+                onMouseEnter={(e) => { if (!checked) (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.04)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = checked ? 'rgba(99,102,241,0.08)' : 'transparent'; }}
+              >
+                <div style={{
+                  width: '16px', height: '16px', borderRadius: '50%', flexShrink: 0,
+                  border: `1px solid ${checked ? '#818cf8' : 'rgba(255,255,255,0.2)'}`,
+                  background: checked ? 'rgba(99,102,241,0.3)' : 'transparent',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  {checked && <Check size={10} style={{ color: '#a5b4fc' }} />}
+                </div>
+                <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: '12.5px' }}>{col}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ── Multi-select dropdown for column-ref array fields ────────────────────────
 const MultiColumnSelect: React.FC<{
   selected: string[];
@@ -195,26 +298,12 @@ const MetadataEditForm = React.forwardRef<
                 placeholder={`Select ${label.toLowerCase()}…`}
               />
             ) : isColumnRef && !isArray ? (
-              <select
-                value={(val as string) || ''}
-                onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value || null }))}
-                style={{
-                  ...inputStyle,
-                  background: '#0f1623',
-                  color: '#f1f5f9',
-                  cursor: 'pointer',
-                  appearance: 'none' as any,
-                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`,
-                  backgroundRepeat: 'no-repeat',
-                  backgroundPosition: 'calc(100% - 10px) center',
-                  paddingRight: '32px',
-                }}
-              >
-                <option value="" style={{ background: '#0f1623', color: '#94a3b8' }}>— None —</option>
-                {columnNames.map((c) => (
-                  <option key={c} value={c} style={{ background: '#0f1623', color: '#f1f5f9' }}>{c}</option>
-                ))}
-              </select>
+              <SingleColumnSelect
+                selected={(val as string) || ''}
+                columns={columnNames}
+                onChange={(v) => setDraft((d) => ({ ...d, [key]: v || null }))}
+                placeholder={`Select ${label.toLowerCase()}…`}
+              />
             ) : isArray ? (
               <input
                 type="text"
@@ -492,6 +581,7 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
       {tables.map(([name, meta]) => (
         <div
           key={name}
+          className="db-table-list-row"
           style={s.tableRow}
           onClick={() => handleSelectTable(name)}
           onMouseEnter={(e) => {
@@ -503,33 +593,40 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
             e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)';
           }}
         >
-          <div style={{
-            width: '32px', height: '32px', borderRadius: '8px',
-            background: 'rgba(6,182,212,0.12)', border: '1px solid rgba(6,182,212,0.25)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          }}>
-            <TableIcon size={16} style={{ color: 'var(--accent-cyan)' }} />
-          </div>
+          {/* Icon + name wrapped together so they stay on the same row on mobile */}
+          <div className="db-table-list-main" style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+            <div style={{
+              width: '32px', height: '32px', borderRadius: '8px',
+              background: 'rgba(6,182,212,0.12)', border: '1px solid rgba(6,182,212,0.25)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            }}>
+              <TableIcon size={16} style={{ color: 'var(--accent-cyan)' }} />
+            </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1, minWidth: 0 }}>
-            <span style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {name}
-            </span>
-            {meta.overview && (
-              <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {meta.overview}
+            <div className="db-table-list-name-cell" style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1, minWidth: 0 }}>
+              <span style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {name}
               </span>
-            )}
+              {meta.overview && (
+                <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {meta.overview}
+                </span>
+              )}
+            </div>
           </div>
 
-          <span style={s.badge('#06b6d4')}>
-            {(meta.row_count ?? 0).toLocaleString()} rows
-          </span>
-          <span style={s.badge('#818cf8')}>
-            {meta.column_count ?? 0} cols
-          </span>
+          {/* Badges — wrap to second row on mobile */}
+          <div className="db-table-list-badges" style={{ display: 'flex', gap: '6px', flexShrink: 0, alignItems: 'center' }}>
+            <span style={s.badge('#06b6d4')}>
+              {(meta.row_count ?? 0).toLocaleString()} rows
+            </span>
+            <span style={s.badge('#818cf8')}>
+              {meta.column_count ?? 0} cols
+            </span>
+          </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }} onClick={(e) => e.stopPropagation()}>
+          {/* Actions — wrap to second row on mobile alongside badges */}
+          <div className="db-table-list-actions" style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
             <button
               className="btn-table-action-view"
               onClick={() => handleSelectTable(name)}
@@ -941,8 +1038,8 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
 
   const content = (
     <>
-      <div style={s.backdrop} onClick={(e) => e.target === e.currentTarget && handleClose()}>
-        <div style={s.card}>
+      <div className="db-tables-modal-backdrop" style={s.backdrop} onClick={(e) => e.target === e.currentTarget && handleClose()}>
+        <div className="db-tables-modal-card" style={s.card}>
           {/* Header */}
           <div style={s.header}>
             <Database size={17} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
@@ -965,7 +1062,7 @@ export const DatabaseTablesModal: React.FC<DatabaseTablesModalProps> = ({
           </div>
 
           {/* Body */}
-          <div style={s.body}>
+          <div className="db-tables-modal-body" style={s.body}>
             {view === 'list' && <ListView />}
             {view === 'detail' && <DetailView />}
           </div>
